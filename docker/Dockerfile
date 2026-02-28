@@ -121,6 +121,7 @@ COPY --from=frontend-builder /app/dist /app/dist
 ENV ABV_DIST_PATH=/app/dist
 ENV RUST_LOG=info
 ENV PORT=8045
+ENV ABV_BIND_LOCAL_ONLY=false
 
 # Expose the proxy/admin port
 EXPOSE 8045

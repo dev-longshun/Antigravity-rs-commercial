@@ -1,0 +1,172 @@
+name: Docker Publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  docker-build-amd64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        id: dockerhub-login
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine tags
+        id: tags
+        run: |
+          GHCR="ghcr.io/${{ github.repository_owner }}/antigravity-manager"
+          DH="${{ github.repository_owner }}/antigravity-manager"
+          DH_OK="${{ steps.dockerhub-login.outcome }}"
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            TAGS="${GHCR}:latest-amd64,${GHCR}:${VERSION}-amd64"
+            [[ "$DH_OK" == "success" ]] && TAGS="${TAGS},${DH}:latest-amd64,${DH}:${VERSION}-amd64"
+          else
+            TAGS="${GHCR}:beta-amd64"
+            [[ "$DH_OK" == "success" ]] && TAGS="${TAGS},${DH}:beta-amd64"
+          fi
+
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push (AMD64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: USE_MIRROR=false
+
+  docker-build-arm64:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        id: dockerhub-login
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine tags
+        id: tags
+        run: |
+          GHCR="ghcr.io/${{ github.repository_owner }}/antigravity-manager"
+          DH="${{ github.repository_owner }}/antigravity-manager"
+          DH_OK="${{ steps.dockerhub-login.outcome }}"
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            TAGS="${GHCR}:latest-arm64,${GHCR}:${VERSION}-arm64"
+            [[ "$DH_OK" == "success" ]] && TAGS="${TAGS},${DH}:latest-arm64,${DH}:${VERSION}-arm64"
+          else
+            TAGS="${GHCR}:beta-arm64"
+            [[ "$DH_OK" == "success" ]] && TAGS="${TAGS},${DH}:beta-arm64"
+          fi
+
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push (ARM64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: USE_MIRROR=false
+
+  docker-manifest:
+    needs: [docker-build-amd64, docker-build-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        id: dockerhub-login
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create and push manifests
+        run: |
+          GHCR="ghcr.io/${{ github.repository_owner }}/antigravity-manager"
+          DH="${{ github.repository_owner }}/antigravity-manager"
+          DH_OK="${{ steps.dockerhub-login.outcome }}"
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+
+            # GHCR multi-arch manifests
+            docker buildx imagetools create -t ${GHCR}:latest \
+              ${GHCR}:latest-amd64 ${GHCR}:latest-arm64
+            docker buildx imagetools create -t ${GHCR}:${VERSION} \
+              ${GHCR}:${VERSION}-amd64 ${GHCR}:${VERSION}-arm64
+
+            # Docker Hub multi-arch manifests
+            if [[ "$DH_OK" == "success" ]]; then
+              docker buildx imagetools create -t ${DH}:latest \
+                ${DH}:latest-amd64 ${DH}:latest-arm64
+              docker buildx imagetools create -t ${DH}:${VERSION} \
+                ${DH}:${VERSION}-amd64 ${DH}:${VERSION}-arm64
+            fi
+          else
+            # Beta manifests
+            docker buildx imagetools create -t ${GHCR}:beta \
+              ${GHCR}:beta-amd64 ${GHCR}:beta-arm64
+
+            if [[ "$DH_OK" == "success" ]]; then
+              docker buildx imagetools create -t ${DH}:beta \
+                ${DH}:beta-amd64 ${DH}:beta-arm64
+            fi
+          fi
