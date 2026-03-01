@@ -251,13 +251,11 @@ impl CloudflaredManager {
                 cmd.arg("tunnel")
                     .arg("--url")
                     .arg(&local_url);
-                
+
                 // 注意：--no-autoupdate 参数在较新版本的 cloudflared 中已不被支持，会导致进程立即退出
                 // cmd.arg("--no-autoupdate");
 
-                if config.use_http2 {
-                    cmd.arg("--protocol").arg("http2");
-                }
+                // 注意：--protocol 参数仅适用于命名隧道（Auth 模式），快速隧道不支持此参数，会导致进程立即退出
                 
                 // 注意：--loglevel 参数在此上下文中也会导致 Incorrect Usage 错误，故移除以使用默认值
                 // cmd.arg("--loglevel").arg("info");
