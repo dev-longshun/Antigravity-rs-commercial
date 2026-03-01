@@ -133,29 +133,6 @@ pub async fn switch_account(
     // [FIX #820] Notify proxy to clear stale session bindings and reload accounts
     let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state.clone()).await;
 
-    // [Proxy Mode] Set preferred account for reverse proxy
-    if switch_mode == "proxy" {
-        // 1. Persist to config file (so it survives proxy restart)
-        if let Ok(mut app_config) = modules::config::load_app_config() {
-            app_config.proxy.preferred_account_id = Some(account_id.clone());
-            let _ = modules::config::save_app_config(&app_config);
-            modules::logger::log_info(&format!(
-                "🔒 [Proxy Mode] Persisted preferred account to config: {}",
-                account_id
-            ));
-        }
-
-        // 2. Set in-memory if proxy is running
-        let instance_lock = proxy_state.instance.read().await;
-        if let Some(instance) = instance_lock.as_ref() {
-            instance.token_manager.set_preferred_account(Some(account_id.clone())).await;
-            modules::logger::log_info(&format!(
-                "🔒 [Proxy Mode] Set preferred account for running proxy: {}",
-                account_id
-            ));
-        }
-    }
-
     Ok(())
 }
 

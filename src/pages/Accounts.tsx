@@ -2,6 +2,7 @@
 
 import {
   Download,
+  Globe,
   LayoutGrid,
   List,
   RefreshCw,
@@ -53,7 +54,18 @@ function Accounts() {
     warmUpAccount,
     updateAccountLabel,
   } = useAccountStore();
-  const { config, showAllQuotas, toggleShowAllQuotas } = useConfigStore();
+  const { config, showAllQuotas, toggleShowAllQuotas, saveConfig } = useConfigStore();
+
+  // 反代模式：pool（号池并发） / fixed（固定账号）
+  const proxyMode: 'pool' | 'fixed' = config?.proxy?.preferred_account_id ? 'fixed' : 'pool';
+  const preferredAccountId = config?.proxy?.preferred_account_id || null;
+
+  // 号池统计
+  const poolStats = useMemo(() => {
+    const total = accounts.length;
+    const inPool = accounts.filter(a => !a.proxy_disabled).length;
+    return { total, inPool };
+  }, [accounts]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
@@ -73,10 +85,6 @@ function Accounts() {
   const [detailsAccount, setDetailsAccount] = useState<Account | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [isBatchDelete, setIsBatchDelete] = useState(false);
-  const [toggleProxyConfirm, setToggleProxyConfirm] = useState<{
-    accountId: string;
-    enable: boolean;
-  } | null>(null);
   const [isWarmupConfirmOpen, setIsWarmupConfirmOpen] = useState(false);
   const [isWarmuping, setIsWarmuping] = useState(false);
   const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
@@ -409,27 +417,65 @@ function Accounts() {
     }
   };
 
-  const handleToggleProxy = (accountId: string, currentlyDisabled: boolean) => {
-    setToggleProxyConfirm({ accountId, enable: currentlyDisabled });
-  };
-
-  const executeToggleProxy = async () => {
-    if (!toggleProxyConfirm) return;
-
+  // 切换反代模式（号池并发 / 固定账号）
+  const handleSwitchProxyMode = async (mode: 'pool' | 'fixed') => {
+    if (!config) return;
     try {
-      await toggleProxyStatus(
-        toggleProxyConfirm.accountId,
-        toggleProxyConfirm.enable,
-        toggleProxyConfirm.enable
-          ? undefined
-          : t("accounts.proxy_disabled_reason_manual"),
-      );
+      const newConfig = {
+        ...config,
+        proxy: {
+          ...config.proxy,
+          preferred_account_id: mode === 'pool' ? null : (preferredAccountId || accounts.find(a => !a.proxy_disabled)?.id || null),
+        },
+      };
+      await saveConfig(newConfig, true);
+      // 尽力同步到运行中的反代服务，未运行时静默跳过
+      try {
+        await invoke('set_preferred_account', { accountId: mode === 'pool' ? null : newConfig.proxy.preferred_account_id });
+      } catch { /* 反代未运行，配置已持久化，下次启动会自动读取 */ }
       showToast(t("common.success"), "success");
     } catch (error) {
-      console.error("[Accounts] Toggle proxy status failed:", error);
       showToast(`${t("common.error")}: ${error}`, "error");
-    } finally {
-      setToggleProxyConfirm(null);
+    }
+  };
+
+  // Globe 按钮统一处理：号池模式 = toggle proxy_disabled，固定模式 = set preferred
+  const handleGlobeClick = async (accountId: string) => {
+    if (proxyMode === 'pool') {
+      // 号池模式：直接切换 proxy_disabled，不弹二次确认
+      const account = accounts.find(a => a.id === accountId);
+      if (!account) return;
+      try {
+        await toggleProxyStatus(
+          accountId,
+          !!account.proxy_disabled,
+          account.proxy_disabled ? undefined : t("accounts.proxy_disabled_reason_manual"),
+        );
+        showToast(t("common.success"), "success");
+      } catch (error) {
+        showToast(`${t("common.error")}: ${error}`, "error");
+      }
+    } else {
+      // 固定模式：设置 preferred_account_id
+      if (!config) return;
+      try {
+        const newPreferred = preferredAccountId === accountId ? null : accountId;
+        const newConfig = {
+          ...config,
+          proxy: {
+            ...config.proxy,
+            preferred_account_id: newPreferred,
+          },
+        };
+        await saveConfig(newConfig, true);
+        // 尽力同步到运行中的反代服务，未运行时静默跳过
+        try {
+          await invoke('set_preferred_account', { accountId: newPreferred });
+        } catch { /* 反代未运行，配置已持久化 */ }
+        showToast(t("common.success"), "success");
+      } catch (error) {
+        showToast(`${t("common.error")}: ${error}`, "error");
+      }
     }
   };
 
@@ -1048,6 +1094,45 @@ function Accounts() {
         </div>
       </div>
 
+      {/* 反代模式切换条 */}
+      <div className="flex-none flex items-center gap-3 px-1">
+        <div className="flex gap-1 bg-gray-100/80 dark:bg-base-200 p-1 rounded-xl border border-gray-200/50 dark:border-white/5 shrink-0">
+          <button
+            className={cn(
+              "px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap",
+              proxyMode === 'pool'
+                ? "bg-white dark:bg-base-100 text-teal-600 dark:text-teal-400 shadow-sm ring-1 ring-black/5"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-base-content hover:bg-white/40"
+            )}
+            onClick={() => handleSwitchProxyMode('pool')}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            {t('accounts.proxy_mode.pool', '号池并发')}
+          </button>
+          <button
+            className={cn(
+              "px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap",
+              proxyMode === 'fixed'
+                ? "bg-white dark:bg-base-100 text-teal-600 dark:text-teal-400 shadow-sm ring-1 ring-black/5"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-base-content hover:bg-white/40"
+            )}
+            onClick={() => handleSwitchProxyMode('fixed')}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            {t('accounts.proxy_mode.fixed', '固定账号')}
+          </button>
+        </div>
+        <span className="text-[11px] text-gray-400 dark:text-gray-500">
+          {proxyMode === 'pool'
+            ? t('accounts.proxy_mode.pool_info', '{{inPool}}/{{total}} 个账号已入池').replace('{{inPool}}', String(poolStats.inPool)).replace('{{total}}', String(poolStats.total))
+            : (preferredAccountId
+              ? `${t('accounts.proxy_mode.fixed_info', '当前固定')}: ${accounts.find(a => a.id === preferredAccountId)?.email || preferredAccountId}`
+              : t('accounts.proxy_mode.fixed_none', '未设置固定账号')
+            )
+          }
+        </span>
+      </div>
+
       {/* 账号列表内容区域 */}
       <div className="flex-1 min-h-0 relative" ref={containerRef}>
         {viewMode === "list" ? (
@@ -1067,16 +1152,13 @@ function Accounts() {
                 onViewDetails={handleViewDetails}
                 onExport={handleExportOne}
                 onDelete={handleDelete}
-                onToggleProxy={(id) =>
-                  handleToggleProxy(
-                    id,
-                    !!accounts.find((a) => a.id === id)?.proxy_disabled,
-                  )
-                }
+                onToggleProxy={handleGlobeClick}
                 onReorder={reorderAccounts}
                 onWarmup={handleWarmup}
                 onUpdateLabel={handleUpdateLabel}
                 onViewError={(id: string) => setErrorAccountId(id)}
+                proxyMode={proxyMode}
+                preferredAccountId={preferredAccountId}
               />
             </div>
           </div>
@@ -1095,15 +1177,12 @@ function Accounts() {
               onViewDetails={handleViewDetails}
               onExport={handleExportOne}
               onDelete={handleDelete}
-              onToggleProxy={(id) =>
-                handleToggleProxy(
-                  id,
-                  !!accounts.find((a) => a.id === id)?.proxy_disabled,
-                )
-              }
+              onToggleProxy={handleGlobeClick}
               onWarmup={handleWarmup}
               onUpdateLabel={handleUpdateLabel}
               onViewError={(id: string) => setErrorAccountId(id)}
+              proxyMode={proxyMode}
+              preferredAccountId={preferredAccountId}
             />
           </div>
         )}
@@ -1178,24 +1257,6 @@ function Accounts() {
         onConfirm={executeRefresh}
         onCancel={() => setIsRefreshConfirmOpen(false)}
       />
-
-      {toggleProxyConfirm && (
-        <ModalDialog
-          isOpen={!!toggleProxyConfirm}
-          onCancel={() => setToggleProxyConfirm(null)}
-          onConfirm={executeToggleProxy}
-          title={
-            toggleProxyConfirm.enable
-              ? t("accounts.dialog.enable_proxy_title")
-              : t("accounts.dialog.disable_proxy_title")
-          }
-          message={
-            toggleProxyConfirm.enable
-              ? t("accounts.dialog.enable_proxy_msg")
-              : t("accounts.dialog.disable_proxy_msg")
-          }
-        />
-      )}
 
       <ModalDialog
         isOpen={isWarmupConfirmOpen}

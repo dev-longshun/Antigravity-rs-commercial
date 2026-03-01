@@ -35,14 +35,12 @@ import {
     Diamond,
     Gem,
     Circle,
-    ToggleLeft,
-    ToggleRight,
+    Globe,
     Sparkles,
     Tag,
     X,
     Check,
     Clock,
-    Globe,
     Bot,
 } from 'lucide-react';
 import { Account } from '../../types/account';
@@ -77,6 +75,8 @@ interface AccountTableProps {
     /** 拖拽排序回调，当用户完成拖拽时触发 */
     onReorder?: (accountIds: string[]) => void;
     onViewError: (accountId: string) => void;
+    proxyMode: 'pool' | 'fixed';
+    preferredAccountId: string | null;
 }
 
 interface SortableRowProps {
@@ -97,6 +97,8 @@ interface SortableRowProps {
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
+    proxyMode: 'pool' | 'fixed';
+    isPreferred?: boolean;
 }
 
 interface AccountRowContentProps {
@@ -115,6 +117,8 @@ interface AccountRowContentProps {
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
+    proxyMode: 'pool' | 'fixed';
+    isPreferred?: boolean;
 }
 
 // ============================================================================
@@ -217,6 +221,8 @@ function SortableAccountRow({
     onWarmup,
     onUpdateLabel,
     onViewError,
+    proxyMode,
+    isPreferred,
 }: SortableRowProps) {
     const { t } = useTranslation();
     const {
@@ -283,6 +289,8 @@ function SortableAccountRow({
                 onWarmup={onWarmup}
                 onUpdateLabel={onUpdateLabel}
                 onViewError={onViewError}
+                proxyMode={proxyMode}
+                isPreferred={isPreferred}
             />
         </tr>
     );
@@ -308,6 +316,8 @@ function AccountRowContent({
     onWarmup,
     onUpdateLabel,
     onViewError,
+    proxyMode,
+    isPreferred,
 }: AccountRowContentProps) {
     const { t } = useTranslation();
     const { config, showAllQuotas } = useConfigStore();
@@ -405,10 +415,34 @@ function AccountRowContent({
                     </span>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                        {isCurrent && (
-                            <span className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 text-[10px] font-bold shadow-sm border border-blue-200/50 dark:border-blue-800/50">
-                                {t('accounts.current').toUpperCase()}
-                            </span>
+                        {proxyMode === 'pool' ? (
+                            account.proxy_disabled ? (
+                                <span className="px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-800/50 text-gray-500 dark:text-gray-400 text-[10px] font-bold flex items-center gap-1 shadow-sm border border-gray-200/50 dark:border-gray-700/50">
+                                    <Ban className="w-2.5 h-2.5" />
+                                    <span>{t('accounts.proxy_mode.not_in_pool', '未入池')}</span>
+                                </span>
+                            ) : (
+                                <span className="px-2 py-0.5 rounded-md bg-teal-100 dark:bg-teal-900/50 text-teal-700 dark:text-teal-300 text-[10px] font-bold flex items-center gap-1 shadow-sm border border-teal-200/50 dark:border-teal-800/50">
+                                    <Globe className="w-2.5 h-2.5" />
+                                    <span>{t('accounts.proxy_mode.in_pool', '已入池')}</span>
+                                </span>
+                            )
+                        ) : (
+                            <>
+                                {isPreferred && (
+                                    <span className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 text-[10px] font-bold shadow-sm border border-blue-200/50 dark:border-blue-800/50">
+                                        {t('accounts.current').toUpperCase()}
+                                    </span>
+                                )}
+                                {account.proxy_disabled && (
+                                    <span
+                                        className="px-2 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 text-[10px] font-bold flex items-center gap-1 shadow-sm border border-orange-200/50"
+                                    >
+                                        <Ban className="w-2.5 h-2.5" />
+                                        <span>{t('accounts.proxy_disabled')}</span>
+                                    </span>
+                                )}
+                            </>
                         )}
                         {isDisabled && (
                             <span
@@ -416,15 +450,6 @@ function AccountRowContent({
                             >
                                 <Ban className="w-2.5 h-2.5" />
                                 <span>{t('accounts.disabled')}</span>
-                            </span>
-                        )}
-
-                        {account.proxy_disabled && (
-                            <span
-                                className="px-2 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 text-[10px] font-bold flex items-center gap-1 shadow-sm border border-orange-200/50"
-                            >
-                                <Ban className="w-2.5 h-2.5" />
-                                <span>{t('accounts.proxy_disabled')}</span>
                             </span>
                         )}
 
@@ -620,14 +645,6 @@ function AccountRowContent({
                     >
                         <ArrowRightLeft className={`w-3.5 h-3.5 ${isSwitching ? 'animate-spin' : ''}`} />
                     </button>
-                    <button
-                        className={`p-1.5 text-gray-500 dark:text-gray-400 rounded-lg transition-all ${(isSwitching || isDisabled) ? 'bg-teal-50 dark:bg-teal-900/10 text-teal-600 dark:text-teal-400 cursor-not-allowed' : 'hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-900/30'}`}
-                        onClick={(e) => { e.stopPropagation(); onSwitch('proxy'); }}
-                        title={isDisabled ? t('accounts.disabled_tooltip') : (isSwitching ? t('common.loading') : t('accounts.switch_proxy'))}
-                        disabled={isSwitching || isDisabled}
-                    >
-                        <Globe className={`w-3.5 h-3.5 ${isSwitching ? 'animate-spin' : ''}`} />
-                    </button>
                     {onWarmup && (
                         <button
                             className={`p-1.5 text-gray-500 dark:text-gray-400 rounded-lg transition-all ${(isRefreshing || isDisabled) ? 'bg-orange-50 dark:bg-orange-900/10 text-orange-600 dark:text-orange-400 cursor-not-allowed' : 'hover:text-orange-500 dark:hover:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/30'}`}
@@ -656,18 +673,21 @@ function AccountRowContent({
                     <button
                         className={cn(
                             "p-1.5 rounded-lg transition-all",
-                            account.proxy_disabled
-                                ? "text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/30"
-                                : "text-gray-500 dark:text-gray-400 hover:text-orange-600 dark:hover:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/30"
+                            proxyMode === 'pool'
+                                ? (account.proxy_disabled
+                                    ? "text-gray-500 dark:text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-900/30"
+                                    : "text-teal-600 bg-teal-50 hover:text-teal-700 hover:bg-teal-100 dark:text-teal-400 dark:bg-teal-900/30 dark:hover:bg-teal-900/50")
+                                : (isPreferred
+                                    ? "text-teal-600 bg-teal-50 dark:text-teal-400 dark:bg-teal-900/30"
+                                    : "text-gray-500 dark:text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-900/30")
                         )}
                         onClick={(e) => { e.stopPropagation(); onToggleProxy(); }}
-                        title={account.proxy_disabled ? t('accounts.enable_proxy') : t('accounts.disable_proxy')}
+                        title={proxyMode === 'pool'
+                            ? (account.proxy_disabled ? t('accounts.enable_proxy') : t('accounts.disable_proxy'))
+                            : (isPreferred ? t('accounts.unset_preferred', '取消固定账号') : t('accounts.set_preferred', '设为固定账号'))
+                        }
                     >
-                        {account.proxy_disabled ? (
-                            <ToggleRight className="w-3.5 h-3.5" />
-                        ) : (
-                            <ToggleLeft className="w-3.5 h-3.5" />
-                        )}
+                        <Globe className="w-3.5 h-3.5" />
                     </button>
                     <button
                         className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-all"
@@ -709,6 +729,8 @@ function AccountTable({
     onWarmup,
     onUpdateLabel,
     onViewError,
+    proxyMode,
+    preferredAccountId,
 }: AccountTableProps) {
     const { t } = useTranslation();
 
@@ -807,6 +829,8 @@ function AccountTable({
                                     onWarmup={onWarmup ? () => onWarmup(account.id) : undefined}
                                     onUpdateLabel={onUpdateLabel ? (label: string) => onUpdateLabel(account.id, label) : undefined}
                                     onViewError={() => onViewError(account.id)}
+                                    proxyMode={proxyMode}
+                                    isPreferred={account.id === preferredAccountId}
                                 />
                             ))}
                         </tbody>
@@ -848,6 +872,8 @@ function AccountTable({
                                         onToggleProxy={() => { }}
                                         isDisabled={Boolean(activeAccount.disabled)}
                                         onViewError={() => { }}
+                                        proxyMode={proxyMode}
+                                        isPreferred={activeAccount.id === preferredAccountId}
                                     />
                                 </tr>
                             </tbody>

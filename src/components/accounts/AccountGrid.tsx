@@ -19,10 +19,12 @@ interface AccountGridProps {
     onWarmup?: (accountId: string) => void;
     onUpdateLabel?: (accountId: string, label: string) => void;
     onViewError: (accountId: string) => void;
+    proxyMode: 'pool' | 'fixed';
+    preferredAccountId: string | null;
 }
 
 
-function AccountGrid({ accounts, selectedIds, refreshingIds, onToggleSelect, currentAccountId, switchingAccountId, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onToggleProxy, onViewDevice, onWarmup, onUpdateLabel, onViewError }: AccountGridProps) {
+function AccountGrid({ accounts, selectedIds, refreshingIds, onToggleSelect, currentAccountId, switchingAccountId, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onToggleProxy, onViewDevice, onWarmup, onUpdateLabel, onViewError, proxyMode, preferredAccountId }: AccountGridProps) {
     const { t } = useTranslation();
     if (accounts.length === 0) {
         return (
@@ -54,6 +56,8 @@ function AccountGrid({ accounts, selectedIds, refreshingIds, onToggleSelect, cur
                     onWarmup={onWarmup ? () => onWarmup(account.id) : undefined}
                     onUpdateLabel={onUpdateLabel ? (label: string) => onUpdateLabel(account.id, label) : undefined}
                     onViewError={() => onViewError(account.id)}
+                    proxyMode={proxyMode}
+                    isPreferred={account.id === preferredAccountId}
                 />
             ))}
         </div>

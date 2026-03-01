@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowRightLeft, RefreshCw, Trash2, Download, Info, Lock, Ban, Diamond, Gem, Circle, ToggleLeft, ToggleRight, Fingerprint, Sparkles, Tag, X, Check, Clock, Bot, Globe } from 'lucide-react';
+import { ArrowRightLeft, RefreshCw, Trash2, Download, Info, Lock, Ban, Diamond, Gem, Circle, Globe, Fingerprint, Sparkles, Tag, X, Check, Clock, Bot } from 'lucide-react';
 import { Account } from '../../types/account';
 import { cn } from '../../utils/cn';
 import { useTranslation } from 'react-i18next';
@@ -24,6 +24,8 @@ interface AccountCardProps {
     onWarmup?: () => void;
     onUpdateLabel?: (label: string) => void;
     onViewError: () => void;
+    proxyMode: 'pool' | 'fixed';
+    isPreferred?: boolean;
 }
 
 // 使用统一的模型配置
@@ -34,7 +36,7 @@ const DEFAULT_MODELS = Object.entries(MODEL_CONFIG).map(([id, config]) => ({
     Icon: config.Icon
 }));
 
-function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, isRefreshing, isSwitching = false, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onToggleProxy, onViewDevice, onWarmup, onUpdateLabel, onViewError }: AccountCardProps) {
+function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, isRefreshing, isSwitching = false, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onToggleProxy, onViewDevice, onWarmup, onUpdateLabel, onViewError, proxyMode, isPreferred }: AccountCardProps) {
     const { t } = useTranslation();
     const { config, showAllQuotas } = useConfigStore();
     const isDisabled = Boolean(account.disabled);
@@ -137,26 +139,34 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                     </h3>
                     <div className="flex items-center justify-between w-full gap-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                            {isCurrent && (
-                                <span className="px-1.5 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-[9px] font-bold shadow-sm border border-blue-200/50">
-                                    {t('accounts.current').toUpperCase()}
-                                </span>
-                            )}
-                            {isDisabled && (
-                                <span
-                                    className="px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 text-[9px] font-bold flex items-center gap-1 shadow-sm border border-rose-200/50"
-                                >
-                                    <Ban className="w-2.5 h-2.5" />
-                                    {t('accounts.disabled').toUpperCase()}
-                                </span>
-                            )}
-                            {account.proxy_disabled && (
-                                <span
-                                    className="px-1.5 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 text-[9px] font-bold flex items-center gap-1 shadow-sm border border-orange-200/50"
-                                >
-                                    <Ban className="w-2.5 h-2.5" />
-                                    {t('accounts.proxy_disabled').toUpperCase()}
-                                </span>
+                            {proxyMode === 'pool' ? (
+                                account.proxy_disabled ? (
+                                    <span className="px-1.5 py-0.5 rounded-md bg-gray-100 dark:bg-gray-800/40 text-gray-500 dark:text-gray-400 text-[9px] font-bold flex items-center gap-1 shadow-sm border border-gray-200/50 dark:border-gray-700/50">
+                                        <Ban className="w-2.5 h-2.5" />
+                                        {t('accounts.proxy_mode.not_in_pool', '未入池').toUpperCase()}
+                                    </span>
+                                ) : (
+                                    <span className="px-1.5 py-0.5 rounded-md bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 text-[9px] font-bold flex items-center gap-1 shadow-sm border border-teal-200/50 dark:border-teal-800/50">
+                                        <Globe className="w-2.5 h-2.5" />
+                                        {t('accounts.proxy_mode.in_pool', '已入池').toUpperCase()}
+                                    </span>
+                                )
+                            ) : (
+                                <>
+                                    {isPreferred && (
+                                        <span className="px-1.5 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-[9px] font-bold shadow-sm border border-blue-200/50">
+                                            {t('accounts.current').toUpperCase()}
+                                        </span>
+                                    )}
+                                    {account.proxy_disabled && (
+                                        <span
+                                            className="px-1.5 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 text-[9px] font-bold flex items-center gap-1 shadow-sm border border-orange-200/50"
+                                        >
+                                            <Ban className="w-2.5 h-2.5" />
+                                            {t('accounts.proxy_disabled').toUpperCase()}
+                                        </span>
+                                    )}
+                                </>
                             )}
                             {account.quota?.is_forbidden && (
                                 <span className="px-1.5 py-0.5 rounded-md bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 text-[9px] font-bold flex items-center gap-1 shadow-sm border border-red-200/50">
@@ -323,14 +333,6 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                     >
                         <ArrowRightLeft className={`w-3.5 h-3.5 ${isSwitching ? 'animate-spin' : ''}`} />
                     </button>
-                    <button
-                        className={`p-1.5 rounded-lg transition-all ${(isSwitching || isDisabled) ? 'text-teal-600 bg-teal-50 dark:text-teal-400 dark:bg-teal-900/10 cursor-not-allowed' : 'text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-900/30'}`}
-                        onClick={(e) => { e.stopPropagation(); onSwitch('proxy'); }}
-                        title={isDisabled ? t('accounts.disabled_tooltip') : (isSwitching ? t('common.loading') : t('accounts.switch_proxy'))}
-                        disabled={isSwitching || isDisabled}
-                    >
-                        <Globe className={`w-3.5 h-3.5 ${isSwitching ? 'animate-spin' : ''}`} />
-                    </button>
                     {onWarmup && (
                         <button
                             className={`p-1.5 rounded-lg transition-all ${(isRefreshing || isDisabled) ? 'text-orange-600 bg-orange-50 dark:bg-orange-900/10 cursor-not-allowed' : 'text-gray-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/30'}`}
@@ -361,18 +363,21 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                     <button
                         className={cn(
                             "p-1.5 rounded-lg transition-all",
-                            account.proxy_disabled
-                                ? "text-gray-400 hover:text-green-600 hover:bg-green-50"
-                                : "text-gray-400 hover:text-orange-600 hover:bg-orange-50"
+                            proxyMode === 'pool'
+                                ? (account.proxy_disabled
+                                    ? "text-gray-400 hover:text-teal-600 hover:bg-teal-50 dark:hover:bg-teal-900/30"
+                                    : "text-teal-600 bg-teal-50 hover:text-teal-700 hover:bg-teal-100 dark:text-teal-400 dark:bg-teal-900/30 dark:hover:bg-teal-900/50")
+                                : (isPreferred
+                                    ? "text-teal-600 bg-teal-50 dark:text-teal-400 dark:bg-teal-900/30"
+                                    : "text-gray-400 hover:text-teal-600 hover:bg-teal-50 dark:hover:bg-teal-900/30")
                         )}
                         onClick={(e) => { e.stopPropagation(); onToggleProxy(); }}
-                        title={account.proxy_disabled ? t('accounts.enable_proxy') : t('accounts.disable_proxy')}
+                        title={proxyMode === 'pool'
+                            ? (account.proxy_disabled ? t('accounts.enable_proxy') : t('accounts.disable_proxy'))
+                            : (isPreferred ? t('accounts.unset_preferred', '取消固定账号') : t('accounts.set_preferred', '设为固定账号'))
+                        }
                     >
-                        {account.proxy_disabled ? (
-                            <ToggleRight className="w-3.5 h-3.5" />
-                        ) : (
-                            <ToggleLeft className="w-3.5 h-3.5" />
-                        )}
+                        <Globe className="w-3.5 h-3.5" />
                     </button>
                     <button
                         className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
