@@ -86,7 +86,7 @@ function Dashboard() {
         isSwitchingRef.current = true;
         console.log('[Dashboard] handleSwitch called for', accountId);
         try {
-            await switchAccount(accountId);
+            await switchAccount(accountId, 'proxy');
             showToast(t('dashboard.toast.switch_success'), 'success');
         } catch (error) {
             console.error('切换账号失败:', error);

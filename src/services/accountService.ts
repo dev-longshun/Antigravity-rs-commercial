@@ -36,8 +36,8 @@ export async function deleteAccounts(accountIds: string[]): Promise<void> {
     return await invoke('delete_accounts', { accountIds });
 }
 
-export async function switchAccount(accountId: string): Promise<void> {
-    return await invoke('switch_account', { accountId });
+export async function switchAccount(accountId: string, mode?: string): Promise<void> {
+    return await invoke('switch_account', { accountId, mode });
 }
 
 export async function fetchAccountQuota(accountId: string): Promise<QuotaData> {

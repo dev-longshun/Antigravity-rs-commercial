@@ -187,6 +187,8 @@
         "last_used": "最后使用",
         "reset_time": "重置时间",
         "switch_to": "切换到此账号",
+        "switch_editor": "切换编辑器",
+        "switch_proxy": "切换反代",
         "actions": "操作",
         "device_fingerprint": "设备指纹",
         "show_all_quotas": "显示所有配额",

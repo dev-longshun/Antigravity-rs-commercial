@@ -1030,7 +1030,7 @@ async fn admin_switch_account(
     let account_id = payload.account_id.clone();
     logger::log_info(&format!("[API] Starting account switch: {}", account_id));
 
-    let result = state.account_service.switch_account(&account_id).await;
+    let result = state.account_service.switch_account(&account_id, "editor").await;
 
     {
         let mut switching = state.switching.write().await;

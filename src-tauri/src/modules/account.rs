@@ -934,9 +934,11 @@ pub fn reorder_accounts(account_ids: &[String]) -> Result<(), String> {
 }
 
 /// Switch current account (Core Logic)
+/// mode: "editor" = full integration (kill/write/restart Antigravity), "proxy" = lightweight (only update internal state)
 pub async fn switch_account(
     account_id: &str,
     integration: &(impl modules::integration::SystemIntegration + ?Sized),
+    mode: &str,
 ) -> Result<(), String> {
     use crate::modules::oauth;
 
@@ -985,7 +987,23 @@ pub async fn switch_account(
     }
 
     // 3. Execute platform-specific system integration (Close proc, Inject DB, Start proc, etc.)
-    integration.on_account_switch(&account).await?;
+    if mode == "proxy" {
+        crate::modules::logger::log_info(&format!(
+            "[Proxy Mode] Skipping editor integration for {}, proxy-only switch",
+            account.email
+        ));
+    } else {
+        match integration.on_account_switch(&account).await {
+            Ok(_) => {}
+            Err(e) if e.contains("storage_json_not_found") => {
+                crate::modules::logger::log_info(&format!(
+                    "⚠️ storage.json not found during switch for {}, skipping device integration (non-fatal)",
+                    account.email
+                ));
+            }
+            Err(e) => return Err(e),
+        }
+    }
 
     // 4. Update tool internal state
     {

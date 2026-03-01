@@ -118,18 +118,43 @@ pub async fn switch_account(
     app: tauri::AppHandle,
     proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
     account_id: String,
+    mode: Option<String>,
 ) -> Result<(), String> {
+    let switch_mode = mode.as_deref().unwrap_or("editor");
     let service = modules::account_service::AccountService::new(
         crate::modules::integration::SystemManager::Desktop(app.clone()),
     );
 
-    service.switch_account(&account_id).await?;
+    service.switch_account(&account_id, switch_mode).await?;
 
     // 同步托盘
     crate::modules::tray::update_tray_menus(&app);
 
     // [FIX #820] Notify proxy to clear stale session bindings and reload accounts
-    let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state).await;
+    let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state.clone()).await;
+
+    // [Proxy Mode] Set preferred account for reverse proxy
+    if switch_mode == "proxy" {
+        // 1. Persist to config file (so it survives proxy restart)
+        if let Ok(mut app_config) = modules::config::load_app_config() {
+            app_config.proxy.preferred_account_id = Some(account_id.clone());
+            let _ = modules::config::save_app_config(&app_config);
+            modules::logger::log_info(&format!(
+                "🔒 [Proxy Mode] Persisted preferred account to config: {}",
+                account_id
+            ));
+        }
+
+        // 2. Set in-memory if proxy is running
+        let instance_lock = proxy_state.instance.read().await;
+        if let Some(instance) = instance_lock.as_ref() {
+            instance.token_manager.set_preferred_account(Some(account_id.clone())).await;
+            modules::logger::log_info(&format!(
+                "🔒 [Proxy Mode] Set preferred account for running proxy: {}",
+                account_id
+            ));
+        }
+    }
 
     Ok(())
 }

@@ -190,6 +190,8 @@
         "last_used": "Last Used",
         "reset_time": "Reset Time",
         "switch_to": "Switch to this account",
+        "switch_editor": "Switch Editor",
+        "switch_proxy": "Switch Proxy",
         "actions": "Actions",
         "device_fingerprint": "Device Fingerprint",
         "show_all_quotas": "Show All Quotas",
