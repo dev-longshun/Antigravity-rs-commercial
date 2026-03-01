@@ -1,0 +1,22 @@
+{
+  "identifier": "com.lbjlaq.antigravity-tools-dev",
+  "app": {
+    "windows": [
+      {
+        "title": "[DEV] Antigravity Tools",
+        "width": 1024,
+        "height": 700,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": true,
+        "visible": false
+      }
+    ]
+  },
+  "plugins": {
+    "single-instance": null,
+    "updater": {
+      "active": false
+    }
+  }
+}
