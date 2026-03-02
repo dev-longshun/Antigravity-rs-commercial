@@ -9,6 +9,8 @@ pub mod proxy;
 pub mod autostart;
 // 导出 cloudflared 命令
 pub mod cloudflared;
+// 导出 zeabur 命令
+pub mod zeabur;
 // 导出 security 命令 (IP 监控)
 pub mod security;
 // 导出 proxy_pool 命令

@@ -652,6 +652,9 @@ impl AxumServer {
             .route("/user-tokens/:id", delete(admin_delete_user_token).patch(admin_update_user_token))
             // OAuth (Web) - Admin 接口
             .route("/auth/url", get(admin_prepare_oauth_url_web))
+            // Zeabur 云端同步接口
+            .route("/sync/accounts", post(handle_sync_accounts))
+            .route("/sync/status", get(handle_sync_status))
             // 应用管理特定鉴权层 (强制校验)
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
@@ -3097,6 +3100,149 @@ fn get_oauth_redirect_uri(port: u16, _host: Option<&str>, _proto: Option<&str>) 
         // 强制返回 localhost。远程部署时，用户可通过回填功能完成授权。
         format!("http://localhost:{}/auth/callback", port)
     }
+}
+
+// ============================================================================
+// Zeabur Cloud Sync Handlers
+// ============================================================================
+
+/// POST /api/sync/accounts — 接收桌面端推送的账号列表
+async fn handle_sync_accounts(
+    State(state): State<AppState>,
+    Json(body): Json<crate::modules::zeabur::SyncAccountsRequest>,
+) -> Result<Json<crate::modules::zeabur::SyncAccountsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    use crate::modules::zeabur::SyncAccountsResponse;
+
+    info!("[sync] Receiving {} accounts from remote", body.accounts.len());
+
+    let mut added: u32 = 0;
+    let mut updated: u32 = 0;
+    let mut failed: u32 = 0;
+
+    // 获取现有账号列表用于 diff
+    let existing = account::list_accounts().unwrap_or_default();
+    let existing_ids: std::collections::HashSet<String> =
+        existing.iter().map(|a| a.id.clone()).collect();
+    let incoming_ids: std::collections::HashSet<String> =
+        body.accounts.iter().map(|a| a.id.clone()).collect();
+
+    // 新增/更新账号
+    for entry in &body.accounts {
+        let is_new = !existing_ids.contains(&entry.id);
+
+        let now = chrono::Utc::now().timestamp();
+        let token_data = crate::models::token::TokenData {
+            access_token: entry.token.access_token.clone(),
+            refresh_token: entry.token.refresh_token.clone(),
+            expires_in: entry.token.expires_in,
+            expiry_timestamp: entry.token.expiry_timestamp,
+            token_type: "Bearer".to_string(),
+            email: Some(entry.email.clone()),
+            project_id: None,
+            session_id: None,
+        };
+
+        // 对于已存在的账号，先加载再更新关键字段以保留其他状态
+        if is_new {
+            let account = crate::models::Account::new(
+                entry.id.clone(),
+                entry.email.clone(),
+                token_data,
+            );
+            match account::save_account(&account) {
+                Ok(_) => {
+                    added += 1;
+                    trigger_account_reload(&entry.id);
+                }
+                Err(e) => {
+                    error!("[sync] Failed to save new account {}: {}", entry.id, e);
+                    failed += 1;
+                }
+            }
+        } else {
+            // 更新现有账号的 token
+            match account::load_account(&entry.id) {
+                Ok(mut acc) => {
+                    acc.token = token_data;
+                    acc.proxy_disabled = entry.proxy_disabled;
+                    acc.custom_label = entry.custom_label.clone();
+                    match account::save_account(&acc) {
+                        Ok(_) => {
+                            updated += 1;
+                            trigger_account_reload(&entry.id);
+                        }
+                        Err(e) => {
+                            error!("[sync] Failed to update account {}: {}", entry.id, e);
+                            failed += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("[sync] Failed to load existing account {}: {}", entry.id, e);
+                    failed += 1;
+                }
+            }
+        }
+    }
+
+    // 删除不在推送列表中的账号
+    let mut removed: u32 = 0;
+    for existing_id in &existing_ids {
+        if !incoming_ids.contains(existing_id) {
+            match account::delete_account(existing_id) {
+                Ok(_) => {
+                    removed += 1;
+                    trigger_account_delete(existing_id);
+                }
+                Err(e) => {
+                    error!("[sync] Failed to delete account {}: {}", existing_id, e);
+                    failed += 1;
+                }
+            }
+        }
+    }
+
+    // 触发 TokenManager 全量重载
+    let instance_lock = state.is_running.read().await;
+    if *instance_lock {
+        let _ = state.token_manager.reload_all_accounts().await;
+    }
+    drop(instance_lock);
+
+    info!(
+        "[sync] Sync completed: added={}, updated={}, removed={}, failed={}",
+        added, updated, removed, failed
+    );
+
+    Ok(Json(SyncAccountsResponse {
+        success: failed == 0,
+        added,
+        updated,
+        removed,
+        failed,
+        error: if failed > 0 {
+            Some(format!("{} accounts failed", failed))
+        } else {
+            None
+        },
+    }))
+}
+
+/// GET /api/sync/status — 返回实例版本、账号数、运行状态
+async fn handle_sync_status(
+    State(state): State<AppState>,
+) -> Json<crate::modules::zeabur::RemoteStatusResponse> {
+    let accounts_count = account::list_accounts()
+        .map(|a| a.len() as u32)
+        .unwrap_or(0);
+    let running = *state.is_running.read().await;
+    let version = Some(env!("CARGO_PKG_VERSION").to_string());
+
+    Json(crate::modules::zeabur::RemoteStatusResponse {
+        version,
+        accounts_count,
+        running,
+    })
 }
 
 // ============================================================================
