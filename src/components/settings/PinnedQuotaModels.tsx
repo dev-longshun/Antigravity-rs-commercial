@@ -43,8 +43,8 @@ const PinnedQuotaModels = ({ config, onChange }: PinnedQuotaModelsProps) => {
     // 基础内置配置模型
     const baseModels = Object.entries(MODEL_CONFIG)
         .filter(([id, cfg]) => {
-            // 隐藏思考变体
-            if (id.includes('thinking')) return false;
+            // 隐藏 Gemini 思考变体（Claude thinking 保留可选）
+            if (id.includes('thinking') && !id.startsWith('claude')) return false;
 
             const labelKey = (cfg.shortLabel || cfg.label).toLowerCase();
             // 在这一层，如果展示用的 labelKey 已经被加过了，就不要重复加到外派的选项里了

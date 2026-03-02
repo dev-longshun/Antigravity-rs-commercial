@@ -369,7 +369,7 @@ function AccountRowContent({
                 const m = account.quota?.models.find(m => m.name === modelId || getModelAliases(modelId).includes(m.name.toLowerCase()));
                 const config = MODEL_CONFIG[modelId];
                 if (!config && !m) return null; // Safe guard for unknown models that aren't fetched
-                const label = m?.display_name || (config?.i18nKey ? t(config.i18nKey) : (config?.shortLabel || config?.label || modelId));
+                const label = (config?.shortLabel || config?.label) || m?.display_name || modelId;
                 return {
                     id: modelId,
                     label: label,
@@ -378,10 +378,8 @@ function AccountRowContent({
                 };
             }).filter(Boolean) as any[]
         ).filter(m => {
-            // 过滤特定的 Claude/Gemini 思考变体 (在列表页隐藏)
-            const isHiddenThinking = m.id.includes('thinking');
-
-            if (isHiddenThinking) return false;
+            // 过滤 Gemini 思考变体（Claude thinking 保留显示）
+            if (m.id.includes('thinking') && !m.id.startsWith('claude')) return false;
 
             // 基于标签去重 (例如 G3.1 Pro 只显示一次)
             // 优先显示有配额数据的 ID
