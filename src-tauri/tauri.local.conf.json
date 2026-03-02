@@ -1,0 +1,27 @@
+{
+  "productName": "Antigravity Local",
+  "identifier": "com.lbjlaq.antigravity-tools-local",
+  "build": {
+    "beforeDevCommand": "npm run dev -- --port 1421",
+    "devUrl": "http://localhost:1421"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "[LOCAL] Antigravity Tools",
+        "width": 1024,
+        "height": 700,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": true,
+        "visible": false
+      }
+    ]
+  },
+  "plugins": {
+    "single-instance": null,
+    "updater": {
+      "active": false
+    }
+  }
+}

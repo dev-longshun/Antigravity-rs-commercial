@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::oneshot;
 use tokio::sync::RwLock;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 // [FIX] 全局待重新加载账号队列
 // 当 update_account_quota 更新 protected_models 后，将账号 ID 加入此队列
