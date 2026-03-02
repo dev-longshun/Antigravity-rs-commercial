@@ -145,6 +145,7 @@ export interface AppConfig {
     circuit_breaker: CircuitBreakerConfig; // [NEW] 熔断器配置
     proxy: ProxyConfig;
     cloudflared: CloudflaredConfig; // [NEW] Cloudflared 配置
+    zeabur: ZeaburConfig; // [NEW] Zeabur 云端部署配置
 }
 
 // ============================================================================
@@ -166,6 +167,27 @@ export interface CloudflaredStatus {
     version?: string;
     running: boolean;
     url?: string;
+    error?: string;
+}
+
+// ============================================================================
+// Zeabur 云端部署类型定义
+// ============================================================================
+
+export interface ZeaburConfig {
+    enabled: boolean;
+    instance_url: string;
+    api_key: string;
+    auto_sync: boolean;
+    sync_interval_secs: number;
+}
+
+export interface ZeaburStatus {
+    connected: boolean;
+    instance_url?: string;
+    version?: string;
+    accounts_synced: number;
+    last_sync_time?: number;
     error?: string;
 }
 

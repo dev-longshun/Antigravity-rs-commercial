@@ -15,6 +15,7 @@ pub mod update_checker;
 pub mod scheduler;
 pub mod token_stats;
 pub mod cloudflared;
+pub mod zeabur;
 pub mod integration;
 pub mod account_service;
 #[allow(dead_code)]

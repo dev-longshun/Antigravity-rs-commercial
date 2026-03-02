@@ -330,6 +330,7 @@ pub fn run() {
         }))
         .manage(commands::proxy::ProxyServiceState::new())
         .manage(commands::cloudflared::CloudflaredState::new())
+        .manage(commands::zeabur::ZeaburState::new())
         .manage(AppRuntimeFlags { tray_enabled })
         .setup(|app| {
             info!("Setup starting...");
@@ -586,6 +587,12 @@ pub fn run() {
             commands::cloudflared::cloudflared_start,
             commands::cloudflared::cloudflared_stop,
             commands::cloudflared::cloudflared_get_status,
+            // Zeabur commands
+            commands::zeabur::zeabur_connect,
+            commands::zeabur::zeabur_disconnect,
+            commands::zeabur::zeabur_sync_accounts,
+            commands::zeabur::zeabur_get_status,
+            commands::zeabur::zeabur_test_connection,
             // Debug console commands
             modules::log_bridge::enable_debug_console,
             modules::log_bridge::disable_debug_console,

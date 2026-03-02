@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::proxy::ProxyConfig;
 use crate::modules::cloudflared::CloudflaredConfig;
+use crate::modules::zeabur::ZeaburConfig;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +31,8 @@ pub struct AppConfig {
     pub hidden_menu_items: Vec<String>, // Hidden menu item path list
     #[serde(default)]
     pub cloudflared: CloudflaredConfig, // [NEW] Cloudflared configuration
+    #[serde(default)]
+    pub zeabur: ZeaburConfig, // [NEW] Zeabur cloud deployment configuration
 }
 
 /// Scheduled warmup configuration
@@ -188,6 +191,7 @@ impl AppConfig {
             circuit_breaker: CircuitBreakerConfig::default(),
             hidden_menu_items: Vec::new(),
             cloudflared: CloudflaredConfig::default(),
+            zeabur: ZeaburConfig::default(),
         }
     }
 }
