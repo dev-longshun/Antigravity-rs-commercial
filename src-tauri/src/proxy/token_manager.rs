@@ -132,6 +132,8 @@ impl TokenManager {
             .map_err(|e| format!("读取账号目录失败: {}", e))?;
 
         let mut count = 0;
+        // email -> account_id 映射，用于去重（同一 email 只保留 timestamp 最新的）
+        let mut email_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
         for entry in entries {
             let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
@@ -145,7 +147,29 @@ impl TokenManager {
             match self.load_single_account(&path).await {
                 Ok(Some(token)) => {
                     let account_id = token.account_id.clone();
-                    self.tokens.insert(account_id, token);
+                    let email = token.email.clone();
+
+                    // 按 email 去重：保留 timestamp 更新的账号
+                    if let Some(existing_id) = email_map.get(&email) {
+                        if let Some(existing) = self.tokens.get(existing_id) {
+                            if token.timestamp > existing.timestamp {
+                                // 新的更新鲜，移除旧的
+                                let old_id = existing_id.clone();
+                                drop(existing);
+                                self.tokens.remove(&old_id);
+                                self.tokens.insert(account_id.clone(), token);
+                                email_map.insert(email, account_id);
+                                tracing::debug!("去重: email {} 保留较新账号，移除 {}", &email_map.values().last().unwrap(), old_id);
+                            } else {
+                                // 旧的更新鲜，跳过新的
+                                tracing::debug!("去重: email {} 跳过较旧账号 {}", email, account_id);
+                                continue;
+                            }
+                        }
+                    } else {
+                        email_map.insert(email, account_id.clone());
+                        self.tokens.insert(account_id, token);
+                    }
                     count += 1;
                 }
                 Ok(None) => {
@@ -157,7 +181,7 @@ impl TokenManager {
             }
         }
 
-        Ok(count)
+        Ok(self.tokens.len())
     }
 
     /// 重新加载指定账号（用于配额更新后的实时同步）

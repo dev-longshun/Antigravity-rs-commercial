@@ -1276,6 +1276,39 @@ print(response.choices[0].message.content)`;
                             </div>
                         </div>
                         <div className="p-3 space-y-3">
+                            {/* Base URL & API Key 快捷复制 */}
+                            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800 p-3 space-y-2">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-gray-600 dark:text-gray-400 w-16 shrink-0">Base URL</span>
+                                    <code className="flex-1 px-2.5 py-1.5 bg-white dark:bg-base-200 rounded text-xs font-mono text-gray-800 dark:text-gray-200 border border-blue-200 dark:border-blue-800 truncate">
+                                        {!isTauri() ? window.location.origin : (status.running ? status.base_url : `http://127.0.0.1:${appConfig.proxy.port || 8045}`)}
+                                    </code>
+                                    <button
+                                        onClick={() => {
+                                            const baseUrl = !isTauri() ? window.location.origin : (status.running ? status.base_url : `http://127.0.0.1:${appConfig.proxy.port || 8045}`);
+                                            copyToClipboardHandler(baseUrl, 'top-base-url');
+                                        }}
+                                        className="px-2.5 py-1.5 border border-blue-300 dark:border-blue-700 rounded-lg bg-white dark:bg-base-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+                                        title={t('proxy.config.btn_copy')}
+                                    >
+                                        {copied === 'top-base-url' ? <CheckCircle size={14} className="text-green-500" /> : <Copy size={14} />}
+                                    </button>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-gray-600 dark:text-gray-400 w-16 shrink-0">API Key</span>
+                                    <code className="flex-1 px-2.5 py-1.5 bg-white dark:bg-base-200 rounded text-xs font-mono text-gray-800 dark:text-gray-200 border border-blue-200 dark:border-blue-800 truncate">
+                                        {appConfig.proxy.api_key}
+                                    </code>
+                                    <button
+                                        onClick={() => copyToClipboardHandler(appConfig.proxy.api_key, 'top-api-key')}
+                                        className="px-2.5 py-1.5 border border-blue-300 dark:border-blue-700 rounded-lg bg-white dark:bg-base-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+                                        title={t('proxy.config.btn_copy')}
+                                    >
+                                        {copied === 'top-api-key' ? <CheckCircle size={14} className="text-green-500" /> : <Copy size={14} />}
+                                    </button>
+                                </div>
+                            </div>
+
                             {/* 监听端口、超时和自启动 */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                 <div>
