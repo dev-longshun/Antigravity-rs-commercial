@@ -73,6 +73,13 @@ function Settings() {
             port: 7860,
             use_http2: true
         },
+        zeabur: {
+            enabled: false,
+            instance_url: '',
+            api_key: '',
+            auto_sync: false,
+            sync_interval_secs: 300,
+        },
         circuit_breaker: {
             enabled: false,
             backoff_steps: [30, 60, 120, 300, 600]
