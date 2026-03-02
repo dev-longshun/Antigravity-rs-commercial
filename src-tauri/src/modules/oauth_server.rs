@@ -8,7 +8,6 @@ use crate::modules::oauth;
 
 struct OAuthFlowState {
     auth_url: String,
-    #[allow(dead_code)]
     redirect_uri: String,
     state: String,
     cancel_tx: watch::Sender<bool>,
@@ -455,6 +454,19 @@ pub async fn submit_oauth_code(code_input: String, state_input: Option<String>) 
     
     Ok(())
 }
+/// Take the redirect_uri from the current OAuth flow state and clean up.
+/// Used by the synchronous Web submit-code handler.
+pub fn take_oauth_redirect_uri_and_cleanup() -> Result<String, String> {
+    let mut lock = get_oauth_flow_state()
+        .lock()
+        .map_err(|e| format!("OAuth state lock corrupted: {}", e))?;
+    let state = lock
+        .take()
+        .ok_or_else(|| "No active OAuth flow found".to_string())?;
+    let _ = state.cancel_tx.send(true);
+    Ok(state.redirect_uri)
+}
+
 /// Manually prepare an OAuth flow without starting listeners.
 /// Useful for Web/Docker environments where we only need manual code submission.
 pub fn prepare_oauth_flow_manually(redirect_uri: String, state_str: String) -> Result<(String, mpsc::Receiver<Result<String, String>>), String> {

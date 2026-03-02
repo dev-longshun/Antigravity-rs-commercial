@@ -1154,17 +1154,63 @@ async fn admin_submit_oauth_code(
     State(state): State<AppState>,
     Json(payload): Json<SubmitCodeRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    state
-        .account_service
-        .submit_oauth_code(payload.code, payload.state)
+    // 1. Extract code from URL if user pasted the full callback URL
+    let code = if payload.code.starts_with("http") {
+        payload.code
+            .split('?')
+            .nth(1)
+            .and_then(|qs| {
+                qs.split('&')
+                    .find_map(|pair| {
+                        let mut kv = pair.splitn(2, '=');
+                        match (kv.next(), kv.next()) {
+                            (Some("code"), Some(v)) => Some(v.to_string()),
+                            _ => None,
+                        }
+                    })
+            })
+            .unwrap_or(payload.code)
+    } else {
+        payload.code
+    };
+
+    // 2. Get redirect_uri from OAuth flow state and clean up
+    let redirect_uri = crate::modules::oauth_server::take_oauth_redirect_uri_and_cleanup()
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
+
+    // 3. Exchange code for token synchronously (instead of async channel)
+    let refresh_token = state
+        .token_manager
+        .exchange_code(&code, &redirect_uri)
         .await
         .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e }),
-            )
+            error!("OAuth token exchange failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Token exchange failed: {}", e) }))
         })?;
-    Ok(StatusCode::OK)
+
+    // 4. Get user info
+    let user_info = state
+        .token_manager
+        .get_user_info(&refresh_token)
+        .await
+        .map_err(|e| {
+            error!("Failed to get user info: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to get user info: {}", e) }))
+        })?;
+
+    // 5. Add account
+    let email = user_info.email;
+    state
+        .token_manager
+        .add_account(&email, &refresh_token)
+        .await
+        .map_err(|e| {
+            error!("Failed to save account: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to save account: {}", e) }))
+        })?;
+
+    info!("Account {} added via manual OAuth code submission", email);
+    Ok(Json(serde_json::json!({ "email": email })))
 }
 
 #[derive(Deserialize)]
