@@ -156,6 +156,8 @@ const MODEL_ID_ALIASES: Record<string, string[]> = {
     'gemini-3.1-pro-high': ['gemini-3.1-pro-high', 'gemini-3-pro-high'],
     'gemini-3.1-pro-low': ['gemini-3.1-pro-low', 'gemini-3-pro-low'],
     'gemini-3.1-pro-preview': ['gemini-3.1-pro-preview', 'gemini-3-pro-preview'],
+    // Claude 非 thinking 回退到 thinking 变体（共享同一配额）
+    'claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-4-6-thinking'],
 };
 
 function getModelAliases(modelId: string): string[] {
