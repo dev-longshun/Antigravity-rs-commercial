@@ -183,6 +183,24 @@ pub fn run() {
                         modified = true;
                     }
 
+                    // [NEW] 支持通过环境变量注入端口
+                    // 优先级：ABV_PORT > PORT > 配置文件
+                    let env_port = std::env::var("ABV_PORT")
+                        .or_else(|_| std::env::var("PORT"))
+                        .ok();
+
+                    if let Some(port_str) = env_port {
+                        if let Ok(port) = port_str.trim().parse::<u16>() {
+                            if port != config.proxy.port {
+                                info!("Using PORT from environment variable: {}", port);
+                                config.proxy.port = port;
+                                modified = true;
+                            }
+                        } else {
+                            warn!("Invalid PORT value: {}, ignoring", port_str);
+                        }
+                    }
+
                     // [NEW] 支持通过环境变量注入 API Key
                     // 优先级：ABV_API_KEY > API_KEY > 配置文件
                     let env_key = std::env::var("ABV_API_KEY")
