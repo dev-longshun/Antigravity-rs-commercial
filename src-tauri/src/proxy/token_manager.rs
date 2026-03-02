@@ -49,6 +49,8 @@ pub struct TokenManager {
     preferred_account_id: Arc<tokio::sync::RwLock<Option<String>>>, // [FIX #820] 优先使用的账号ID（固定账号模式）
     health_scores: Arc<DashMap<String, f32>>,                       // account_id -> health_score
     circuit_breaker_config: Arc<tokio::sync::RwLock<crate::models::CircuitBreakerConfig>>, // [NEW] 熔断配置缓存
+    /// 磁盘账号状态缓存 (account_path_str -> (state, cached_at))，避免每次请求都读磁盘
+    account_state_cache: Arc<DashMap<String, (OnDiskAccountState, std::time::Instant)>>,
     /// 支持优雅关闭时主动 abort 后台任务
     auto_cleanup_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     cancel_token: CancellationToken,
@@ -70,14 +72,16 @@ impl TokenManager {
             circuit_breaker_config: Arc::new(tokio::sync::RwLock::new(
                 crate::models::CircuitBreakerConfig::default(),
             )),
+            account_state_cache: Arc::new(DashMap::new()),
             auto_cleanup_handle: Arc::new(tokio::sync::Mutex::new(None)),
             cancel_token: CancellationToken::new(),
         }
     }
 
-    /// 启动限流记录自动清理后台任务（每15秒检查并清除过期记录）
+    /// 启动限流记录自动清理 + Token 预刷新后台任务（每15秒执行）
     pub async fn start_auto_cleanup(&self) {
         let tracker = self.rate_limit_tracker.clone();
+        let tokens = self.tokens.clone();
         let cancel = self.cancel_token.child_token();
 
         let handle = tokio::spawn(async move {
@@ -89,12 +93,65 @@ impl TokenManager {
                         break;
                     }
                     _ = interval.tick() => {
+                        // 1. 清理过期限流记录
                         let cleaned = tracker.cleanup_expired();
                         if cleaned > 0 {
                             tracing::info!(
                                 "Auto-cleanup: Removed {} expired rate limit record(s)",
                                 cleaned
                             );
+                        }
+
+                        // 2. 预刷新即将过期的 Token（10 分钟内过期），避免请求热路径中的同步刷新
+                        let now = chrono::Utc::now().timestamp();
+                        let expiring: Vec<(String, String, String, PathBuf)> = tokens.iter()
+                            .filter(|entry| now >= entry.value().timestamp - 600)
+                            .map(|entry| {
+                                let v = entry.value();
+                                (v.account_id.clone(), v.refresh_token.clone(), v.email.clone(), v.account_path.clone())
+                            })
+                            .collect();
+
+                        if !expiring.is_empty() {
+                            tracing::debug!("Pre-refresh: {} token(s) expiring within 10 minutes", expiring.len());
+                        }
+
+                        for (account_id, refresh_token, email, account_path) in expiring {
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                crate::modules::oauth::refresh_access_token(&refresh_token, Some(&account_id))
+                            ).await {
+                                Ok(Ok(token_response)) => {
+                                    let new_timestamp = chrono::Utc::now().timestamp() + token_response.expires_in;
+                                    // 更新内存中的 token
+                                    if let Some(mut entry) = tokens.get_mut(&account_id) {
+                                        entry.access_token = token_response.access_token.clone();
+                                        entry.expires_in = token_response.expires_in;
+                                        entry.timestamp = new_timestamp;
+                                    }
+                                    tracing::debug!("Pre-refresh: Token refreshed for {}", email);
+
+                                    // 落盘（best-effort，避免重启后重复刷新）
+                                    if let Ok(content) = tokio::fs::read_to_string(&account_path).await {
+                                        if let Ok(mut account) = serde_json::from_str::<serde_json::Value>(&content) {
+                                            if let Some(obj) = account.as_object_mut() {
+                                                obj.insert("access_token".to_string(), serde_json::json!(token_response.access_token));
+                                                obj.insert("expires_in".to_string(), serde_json::json!(token_response.expires_in));
+                                                obj.insert("timestamp".to_string(), serde_json::json!(new_timestamp));
+                                                if let Ok(json_str) = serde_json::to_string_pretty(&account) {
+                                                    let _ = tokio::fs::write(&account_path, json_str).await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::debug!("Pre-refresh failed for {}: {}", email, e);
+                                }
+                                Err(_) => {
+                                    tracing::debug!("Pre-refresh timed out (5s) for {}", email);
+                                }
+                            }
                         }
                     }
                 }
@@ -316,6 +373,25 @@ impl TokenManager {
         }
 
         OnDiskAccountState::Unknown
+    }
+
+    /// 带 30s 缓存的磁盘状态检查，避免每次请求都读磁盘 I/O
+    async fn get_account_state_cached(&self, account_path: &std::path::PathBuf) -> OnDiskAccountState {
+        let cache_key = account_path.to_string_lossy().to_string();
+        const CACHE_TTL_SECS: u64 = 30;
+
+        // 查缓存
+        if let Some(entry) = self.account_state_cache.get(&cache_key) {
+            let (state, cached_at) = entry.value();
+            if cached_at.elapsed().as_secs() < CACHE_TTL_SECS {
+                return *state;
+            }
+        }
+
+        // 缓存未命中或过期，读磁盘
+        let state = Self::get_account_state_on_disk(account_path).await;
+        self.account_state_cache.insert(cache_key, (state, std::time::Instant::now()));
+        state
     }
 
     /// 加载单个账号
@@ -1023,8 +1099,8 @@ impl TokenManager {
             );
         }
 
-        // 【优化 Issue #284】添加 5 秒超时，防止死锁
-        let timeout_duration = std::time::Duration::from_secs(5);
+        // 【优化 Issue #284】添加 10 秒超时，防止死锁（从 5s 提升到 10s，给多账号 token 刷新留余量）
+        let timeout_duration = std::time::Duration::from_secs(10);
         match tokio::time::timeout(
             timeout_duration,
             self.get_token_internal(quota_group, force_rotate, session_id, target_model),
@@ -1165,7 +1241,7 @@ impl TokenManager {
                 .cloned()
             {
                 // 检查账号是否可用（未限流、未被配额保护）
-                match Self::get_account_state_on_disk(&preferred_token.account_path).await {
+                match self.get_account_state_cached(&preferred_token.account_path).await {
                     OnDiskAccountState::Disabled => {
                         tracing::warn!(
                             "🔒 [FIX #820] Preferred account {} is disabled on disk, purging and falling back",
@@ -1226,10 +1302,11 @@ impl TokenManager {
                     let now = chrono::Utc::now().timestamp();
                     if now >= token.timestamp - 300 {
                         tracing::debug!("账号 {} 的 token 即将过期，正在刷新...", token.email);
-                        match crate::modules::oauth::refresh_access_token(&token.refresh_token, Some(&token.account_id))
-                            .await
-                        {
-                            Ok(token_response) => {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(3),
+                            crate::modules::oauth::refresh_access_token(&token.refresh_token, Some(&token.account_id))
+                        ).await {
+                            Ok(Ok(token_response)) => {
                                 token.access_token = token_response.access_token.clone();
                                 token.expires_in = token_response.expires_in;
                                 token.timestamp = now + token_response.expires_in;
@@ -1243,9 +1320,12 @@ impl TokenManager {
                                     .save_refreshed_token(&token.account_id, &token_response)
                                     .await;
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 tracing::warn!("Preferred account token refresh failed: {}", e);
                                 // 继续使用旧 token，让后续逻辑处理失败
+                            }
+                            Err(_) => {
+                                tracing::warn!("Preferred account token refresh timed out (3s): {}", token.email);
                             }
                         }
                     }
@@ -1473,10 +1553,10 @@ impl TokenManager {
                         .filter_map(|t| self.rate_limit_tracker.get_reset_seconds(&t.account_id))
                         .min();
 
-                    // Layer 1: 如果最短等待时间 <= 2秒,执行缓冲延迟
+                    // Layer 1: 如果最短等待时间 <= 1秒,执行缓冲延迟（缩短阈值，减少超时预算消耗）
                     if let Some(wait_sec) = min_wait {
-                        if wait_sec <= 2 {
-                            let wait_ms = (wait_sec as f64 * 1000.0) as u64;
+                        if wait_sec <= 1 {
+                            let wait_ms = ((wait_sec as f64 * 1000.0) as u64).min(500); // 上限 500ms
                             tracing::warn!(
                                 "All accounts rate-limited but shortest wait is {}s. Applying {}ms buffer for state sync...",
                                 wait_sec, wait_ms
@@ -1536,7 +1616,7 @@ impl TokenManager {
 
             // Safety net: avoid selecting an account that has been disabled on disk but still
             // exists in the in-memory snapshot (e.g. stale cache + sticky session binding).
-            match Self::get_account_state_on_disk(&token.account_path).await {
+            match self.get_account_state_cached(&token.account_path).await {
                 OnDiskAccountState::Disabled => {
                     tracing::warn!(
                         "Selected account {} is disabled on disk, purging and retrying",
@@ -1562,9 +1642,12 @@ impl TokenManager {
             if now >= token.timestamp - 300 {
                 tracing::debug!("账号 {} 的 token 即将过期，正在刷新...", token.email);
 
-                // 调用 OAuth 刷新 token
-                match crate::modules::oauth::refresh_access_token(&token.refresh_token, Some(&token.account_id)).await {
-                    Ok(token_response) => {
+                // 调用 OAuth 刷新 token（3s 超时保护，避免单次刷新卡死整个流程）
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    crate::modules::oauth::refresh_access_token(&token.refresh_token, Some(&token.account_id))
+                ).await {
+                    Ok(Ok(token_response)) => {
                         tracing::debug!("Token 刷新成功！");
 
                         // 更新本地内存对象供后续使用
@@ -1587,7 +1670,7 @@ impl TokenManager {
                             tracing::debug!("保存刷新后的 token 失败 ({}): {}", token.email, e);
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::error!("Token 刷新失败 ({}): {}，尝试下一个账号", token.email, e);
                         if e.contains("\"invalid_grant\"") || e.contains("invalid_grant") {
                             tracing::error!(
@@ -1615,6 +1698,12 @@ impl TokenManager {
                                 // 空字符串表示需要清除
                             }
                         }
+                        continue;
+                    }
+                    Err(_) => {
+                        tracing::warn!("Token 刷新超时 (3s) ({}), 尝试下一个账号", token.email);
+                        last_error = Some(format!("Token refresh timed out for {}", token.email));
+                        attempted.insert(token.account_id.clone());
                         continue;
                     }
                 }

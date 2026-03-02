@@ -5,6 +5,7 @@ use dashmap::DashMap;
 use rquest::{header, Client, Response, StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 
@@ -61,6 +62,10 @@ pub struct UpstreamClient {
     proxy_pool: Option<Arc<crate::proxy::proxy_pool::ProxyPoolManager>>,
     client_cache: DashMap<String, Client>, // proxy_id -> Client
     user_agent_override: RwLock<Option<String>>,
+    /// 上次成功的端点索引，用于优先直连（健康记忆）
+    last_successful_endpoint: AtomicUsize,
+    /// 上次成功的时间戳（秒级），用于判断记忆是否过期
+    last_success_time: AtomicUsize,
 }
 
 impl UpstreamClient {
@@ -93,6 +98,8 @@ impl UpstreamClient {
             proxy_pool,
             client_cache: DashMap::new(),
             user_agent_override: RwLock::new(None),
+            last_successful_endpoint: AtomicUsize::new(0),
+            last_success_time: AtomicUsize::new(0),
         }
     }
 
@@ -103,7 +110,7 @@ impl UpstreamClient {
         let mut builder = Client::builder()
             .emulation(rquest_util::Emulation::Chrome123)
             // Connection settings (优化连接复用，减少建立开销)
-            .connect_timeout(Duration::from_secs(20))
+            .connect_timeout(Duration::from_secs(8))
             .pool_max_idle_per_host(16) // 每主机最多 16 个空闲连接
             .pool_idle_timeout(Duration::from_secs(90)) // 空闲连接保持 90 秒
             .tcp_keepalive(Duration::from_secs(60)) // TCP 保活探测 60 秒
@@ -132,7 +139,7 @@ impl UpstreamClient {
         // Reuse base settings similar to default client but with specific proxy
         let builder = Client::builder()
             .emulation(rquest_util::Emulation::Chrome123)
-            .connect_timeout(Duration::from_secs(20))
+            .connect_timeout(Duration::from_secs(8))
             .pool_max_idle_per_host(16)
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(60))
@@ -328,92 +335,127 @@ impl UpstreamClient {
         // [DEBUG] Log headers for verification
         tracing::debug!(?headers, "Final Upstream Request Headers");
 
-        let mut last_err: Option<String> = None;
-        // [NEW] 收集降级尝试记录
         let mut fallback_attempts: Vec<FallbackAttemptLog> = Vec::new();
 
-        // 遍历所有端点，失败时自动切换
-        for (idx, base_url) in V1_INTERNAL_BASE_URL_FALLBACKS.iter().enumerate() {
+        // --- [OPTIMIZED] 端点健康记忆：优先尝试上次成功的端点（避免不必要的并发连接） ---
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as usize;
+        let last_success_at = self.last_success_time.load(Ordering::Relaxed);
+        let preferred_idx = self.last_successful_endpoint.load(Ordering::Relaxed);
+        let has_valid_memory = last_success_at > 0
+            && now_secs.saturating_sub(last_success_at) < 60
+            && preferred_idx < V1_INTERNAL_BASE_URL_FALLBACKS.len();
+
+        if has_valid_memory {
+            let base_url = V1_INTERNAL_BASE_URL_FALLBACKS[preferred_idx];
             let url = Self::build_url(base_url, method, query_string);
-            let has_next = idx + 1 < V1_INTERNAL_BASE_URL_FALLBACKS.len();
 
-            let response = client
-                .post(&url)
-                .headers(headers.clone())
-                .json(&body)
-                .send()
-                .await;
-
-            match response {
+            match client.post(&url).headers(headers.clone()).json(&body).send().await {
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_success() {
-                        if idx > 0 {
-                            tracing::info!(
-                                "✓ Upstream fallback succeeded | Endpoint: {} | Status: {} | Next endpoints available: {}",
-                                base_url,
-                                status,
-                                V1_INTERNAL_BASE_URL_FALLBACKS.len() - idx - 1
-                            );
-                        } else {
-                            tracing::debug!(
-                                "✓ Upstream request succeeded | Endpoint: {} | Status: {}",
-                                base_url,
-                                status
-                            );
-                        }
-                        return Ok(UpstreamCallResult {
-                            response: resp,
-                            fallback_attempts,
-                        });
+                        self.last_success_time.store(now_secs, Ordering::Relaxed);
+                        tracing::debug!("✓ Upstream via preferred [{}]: {}", preferred_idx, base_url);
+                        return Ok(UpstreamCallResult { response: resp, fallback_attempts });
                     }
-
-                    // 如果有下一个端点且当前错误可重试，则切换
-                    if has_next && Self::should_try_next_endpoint(status) {
-                        let err_msg = format!("Upstream {} returned {}", base_url, status);
-                        tracing::warn!(
-                            "Upstream endpoint returned {} at {} (method={}), trying next endpoint",
-                            status,
-                            base_url,
-                            method
-                        );
-                        // [NEW] 记录降级尝试
-                        fallback_attempts.push(FallbackAttemptLog {
-                            endpoint_url: url.clone(),
-                            status: Some(status.as_u16()),
-                            error: err_msg.clone(),
-                        });
-                        last_err = Some(err_msg);
-                        continue;
+                    if !Self::should_try_next_endpoint(status) {
+                        // 不可重试错误（如 401/403），所有端点结果相同，直接返回
+                        return Ok(UpstreamCallResult { response: resp, fallback_attempts });
                     }
-
-                    // 不可重试的错误或已是最后一个端点，直接返回
-                    return Ok(UpstreamCallResult {
-                        response: resp,
-                        fallback_attempts,
+                    let err_msg = format!("Preferred endpoint {} returned {}", base_url, status);
+                    tracing::warn!("{}", err_msg);
+                    fallback_attempts.push(FallbackAttemptLog {
+                        endpoint_url: url, status: Some(status.as_u16()), error: err_msg,
                     });
                 }
                 Err(e) => {
-                    let msg = format!("HTTP request failed at {}: {}", base_url, e);
-                    tracing::debug!("{}", msg);
-                    // [NEW] 记录网络错误的降级尝试
+                    let msg = format!("Preferred endpoint {} connect failed: {}", base_url, e);
+                    tracing::warn!("{}", msg);
                     fallback_attempts.push(FallbackAttemptLog {
-                        endpoint_url: url.clone(),
-                        status: None,
-                        error: msg.clone(),
+                        endpoint_url: url, status: None, error: msg,
                     });
-                    last_err = Some(msg);
+                }
+            }
+            tracing::info!("Preferred endpoint [{}] failed, racing all endpoints concurrently", preferred_idx);
+        }
 
-                    // 如果是最后一个端点，退出循环
-                    if !has_next {
-                        break;
+        // --- [OPTIMIZED] 并发竞速：同时向所有端点发请求，第一个成功即返回，其余自动取消 ---
+        let urls: [String; 3] = [
+            Self::build_url(V1_INTERNAL_BASE_URL_FALLBACKS[0], method, query_string),
+            Self::build_url(V1_INTERNAL_BASE_URL_FALLBACKS[1], method, query_string),
+            Self::build_url(V1_INTERNAL_BASE_URL_FALLBACKS[2], method, query_string),
+        ];
+
+        let f0 = client.post(&urls[0]).headers(headers.clone()).json(&body).send();
+        let f1 = client.post(&urls[1]).headers(headers.clone()).json(&body).send();
+        let f2 = client.post(&urls[2]).headers(headers.clone()).json(&body).send();
+        tokio::pin!(f0, f1, f2);
+
+        let mut done = [false; 3];
+        let mut last_retryable_resp: Option<Response> = None;
+
+        for _ in 0..3 {
+            let (idx, result) = tokio::select! {
+                r = &mut f0, if !done[0] => { done[0] = true; (0usize, r) }
+                r = &mut f1, if !done[1] => { done[1] = true; (1usize, r) }
+                r = &mut f2, if !done[2] => { done[2] = true; (2usize, r) }
+            };
+
+            let base_url = V1_INTERNAL_BASE_URL_FALLBACKS[idx];
+
+            match result {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        // 成功！更新健康记忆，剩余 future drop 时自动取消
+                        self.last_successful_endpoint.store(idx, Ordering::Relaxed);
+                        self.last_success_time.store(now_secs, Ordering::Relaxed);
+                        if fallback_attempts.is_empty() {
+                            tracing::debug!("✓ Upstream succeeded [{}]: {}", idx, base_url);
+                        } else {
+                            tracing::info!(
+                                "✓ Upstream race winner [{}]: {} (after {} failed attempts)",
+                                idx, base_url, fallback_attempts.len()
+                            );
+                        }
+                        return Ok(UpstreamCallResult { response: resp, fallback_attempts });
                     }
-                    continue;
+                    if !Self::should_try_next_endpoint(status) {
+                        return Ok(UpstreamCallResult { response: resp, fallback_attempts });
+                    }
+                    // 可重试错误，记录并等待其他端点结果
+                    let err_msg = format!("Endpoint [{}] {} returned {}", idx, base_url, status);
+                    tracing::warn!("{}", err_msg);
+                    fallback_attempts.push(FallbackAttemptLog {
+                        endpoint_url: urls[idx].clone(),
+                        status: Some(status.as_u16()),
+                        error: err_msg,
+                    });
+                    last_retryable_resp = Some(resp);
+                }
+                Err(e) => {
+                    let msg = format!("Endpoint [{}] {} connect failed: {}", idx, base_url, e);
+                    tracing::debug!("{}", msg);
+                    fallback_attempts.push(FallbackAttemptLog {
+                        endpoint_url: urls[idx].clone(),
+                        status: None,
+                        error: msg,
+                    });
                 }
             }
         }
 
-        Err(last_err.unwrap_or_else(|| "All endpoints failed".to_string()))
+        // 所有端点都失败
+        if let Some(resp) = last_retryable_resp {
+            // 返回最后一个可重试响应，让上层处理（如 429 触发账号轮换）
+            Ok(UpstreamCallResult { response: resp, fallback_attempts })
+        } else {
+            Err(fallback_attempts.last()
+                .map(|a| a.error.clone())
+                .unwrap_or_else(|| "All endpoints failed".to_string()))
+        }
     }
 
     /// 调用 v1internal API（带 429 重试,支持闭包）
