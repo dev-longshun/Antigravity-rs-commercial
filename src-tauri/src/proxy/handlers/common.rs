@@ -36,32 +36,19 @@ pub fn determine_retry_strategy(
             RetryStrategy::FixedDelay(Duration::from_millis(200))
         }
 
-        // 429 限流错误
-        429 => {
-            // 优先使用服务端返回的 Retry-After
-            if let Some(delay_ms) = crate::proxy::upstream::retry::parse_retry_delay(error_text) {
-                let actual_delay = delay_ms.saturating_add(200).min(30_000); // 上限上调至 30s
-                RetryStrategy::FixedDelay(Duration::from_millis(actual_delay))
-            } else {
-                // 否则使用线性退避：起始 5s，逐步增加
-                RetryStrategy::LinearBackoff { base_ms: 5000 }
-            }
-        }
+        // 429 限流错误：快速轮换账号，RateLimitTracker 已标记该账号
+        429 => RetryStrategy::FixedDelay(Duration::from_millis(200)),
 
-        // 503 服务不可用 / 529 服务器过载
+        // 503 服务不可用 / 529 服务器过载（全局性问题，轮换账号无意义，保留退避）
         503 | 529 => {
-            // 指数退避：起始 10s，上限 60s (针对 Google 边缘节点过载)
             RetryStrategy::ExponentialBackoff {
-                base_ms: 10000,
-                max_ms: 60000,
+                base_ms: 2000,
+                max_ms: 15000,
             }
         }
 
-        // 500 服务器内部错误
-        500 => {
-            // 线性退避：起始 3s
-            RetryStrategy::LinearBackoff { base_ms: 3000 }
-        }
+        // 500 服务器内部错误：快速轮换账号
+        500 => RetryStrategy::FixedDelay(Duration::from_millis(200)),
 
         // 401/403 认证/权限错误：切换账号前给予极短缓冲
         401 | 403 => RetryStrategy::FixedDelay(Duration::from_millis(200)),
@@ -83,6 +70,12 @@ pub async fn apply_retry_strategy(
     status_code: u16,
     trace_id: &str,
 ) -> bool {
+    // 最后一次 attempt 不再 sleep，直接返回（避免浪费时间后仍返回错误）
+    if attempt + 1 >= max_attempts {
+        debug!("[{}] Last attempt reached (attempt={}/{}), not retrying", trace_id, attempt + 1, max_attempts);
+        return false;
+    }
+
     match strategy {
         RetryStrategy::NoRetry => {
             debug!("[{}] Non-retryable error {}, stopping", trace_id, status_code);

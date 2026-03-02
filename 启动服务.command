@@ -21,6 +21,12 @@ echo "  模式: GUI 桌面应用"
 echo "按 Ctrl+C 停止服务"
 echo "---"
 
+# 检测依赖（worktree 环境无 node_modules）
+if [ ! -d "node_modules" ]; then
+    echo "📦 首次运行，安装依赖..."
+    npm install || { echo "❌ 依赖安装失败"; exit 1; }
+fi
+
 npm run tauri dev -- --config src-tauri/tauri.local.conf.json
 EXIT_CODE=$?
 
