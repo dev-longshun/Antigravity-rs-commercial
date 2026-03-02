@@ -18,8 +18,10 @@ pub struct UserToken {
     pub username: String,
     pub description: Option<String>,
     pub enabled: bool,
-    pub expires_type: String,      // "day", "week", "month", "never"
+    pub expires_type: String,      // "hour", "day", "week", "month", "custom", "never"
     pub expires_at: Option<i64>,
+    pub duration_seconds: Option<i64>,  // 有效期时长(秒)，首次请求激活后开始计算
+    pub activated_at: Option<i64>,      // 首次请求激活时间戳
     pub max_ips: i32,              // 0 = unlimited
     pub curfew_start: Option<String>, // "HH:MM" 宵禁开始时间
     pub curfew_end: Option<String>,   // "HH:MM" 宵禁结束时间
@@ -105,6 +107,8 @@ pub fn init_db() -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE user_tokens ADD COLUMN last_used_at INTEGER", []);
     let _ = conn.execute("ALTER TABLE user_tokens ADD COLUMN curfew_start TEXT", []);
     let _ = conn.execute("ALTER TABLE user_tokens ADD COLUMN curfew_end TEXT", []);
+    let _ = conn.execute("ALTER TABLE user_tokens ADD COLUMN duration_seconds INTEGER", []);
+    let _ = conn.execute("ALTER TABLE user_tokens ADD COLUMN activated_at INTEGER", []);
 
     // 创建 token_ip_bindings 表
     conn.execute(
@@ -154,6 +158,8 @@ pub fn init_db() -> Result<(), String> {
 }
 
 /// 创建新令牌
+/// 创建时只记录有效期时长(duration_seconds)，不计算 expires_at
+/// Token 处于"待激活"状态，首次请求时才激活并开始计时
 pub fn create_token(
     username: String,
     expires_type: String,
@@ -161,19 +167,22 @@ pub fn create_token(
     max_ips: i32,
     curfew_start: Option<String>,
     curfew_end: Option<String>,
-    custom_expires_at: Option<i64>  // 自定义过期时间戳 (秒)
+    duration_seconds: Option<i64>,  // 有效期时长(秒)
 ) -> Result<UserToken, String> {
     let conn = connect_db()?;
     let id = Uuid::new_v4().to_string();
     let token = format!("sk-{}", Uuid::new_v4().to_string().replace("-", ""));
     let now = Utc::now().timestamp();
 
-    let expires_at = match expires_type.as_str() {
-        "day" => Some(Utc::now().checked_add_signed(chrono::Duration::days(1)).unwrap().timestamp()),
-        "week" => Some(Utc::now().checked_add_signed(chrono::Duration::weeks(1)).unwrap().timestamp()),
-        "month" => Some(Utc::now().checked_add_signed(chrono::Duration::days(30)).unwrap().timestamp()),
-        "custom" => custom_expires_at, // 使用自定义时间戳
-        _ => None, // "never" or other
+    // 根据 expires_type 计算 duration_seconds
+    let duration = match expires_type.as_str() {
+        "hour" => Some(3600),
+        "day" => Some(86400),
+        "3day" => Some(86400 * 3),
+        "week" => Some(86400 * 7),
+        "month" => Some(86400 * 30),
+        "custom" => duration_seconds,
+        _ => None, // "never"
     };
 
     let user_token = UserToken {
@@ -183,7 +192,9 @@ pub fn create_token(
         description: description.clone(),
         enabled: true,
         expires_type: expires_type.clone(),
-        expires_at,
+        expires_at: None,           // 创建时不计算过期时间
+        duration_seconds: duration, // 记录有效期时长
+        activated_at: None,         // 待激活
         max_ips,
         curfew_start: curfew_start.clone(),
         curfew_end: curfew_end.clone(),
@@ -196,10 +207,11 @@ pub fn create_token(
 
     conn.execute(
         "INSERT INTO user_tokens (
-            id, token, username, description, enabled, expires_type, expires_at, max_ips,
-            curfew_start, curfew_end,
+            id, token, username, description, enabled, expires_type, expires_at,
+            duration_seconds, activated_at,
+            max_ips, curfew_start, curfew_end,
             created_at, updated_at, total_requests, total_tokens_used
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             user_token.id,
             user_token.token,
@@ -208,6 +220,8 @@ pub fn create_token(
             user_token.enabled,
             user_token.expires_type,
             user_token.expires_at,
+            user_token.duration_seconds,
+            user_token.activated_at,
             user_token.max_ips,
             user_token.curfew_start,
             user_token.curfew_end,
@@ -233,9 +247,11 @@ pub fn list_tokens() -> Result<Vec<UserToken>, String> {
             token: row.get("token")?,
             username: row.get("username")?,
             description: row.get("description")?,
-            enabled: row.get("enabled").unwrap_or(true), // 防御性默认值
-            expires_type: row.get("expires_type").unwrap_or("never".to_string()), // 防御性默认值
+            enabled: row.get("enabled").unwrap_or(true),
+            expires_type: row.get("expires_type").unwrap_or("never".to_string()),
             expires_at: row.get("expires_at").unwrap_or(None),
+            duration_seconds: row.get("duration_seconds").unwrap_or(None),
+            activated_at: row.get("activated_at").unwrap_or(None),
             max_ips: row.get("max_ips").unwrap_or(0),
             curfew_start: row.get("curfew_start").unwrap_or(None),
             curfew_end: row.get("curfew_end").unwrap_or(None),
@@ -270,6 +286,8 @@ pub fn get_token_by_id(id: &str) -> Result<Option<UserToken>, String> {
             enabled: row.get("enabled")?,
             expires_type: row.get("expires_type")?,
             expires_at: row.get("expires_at")?,
+            duration_seconds: row.get("duration_seconds").unwrap_or(None),
+            activated_at: row.get("activated_at").unwrap_or(None),
             max_ips: row.get("max_ips")?,
             curfew_start: row.get("curfew_start").unwrap_or(None),
             curfew_end: row.get("curfew_end").unwrap_or(None),
@@ -280,7 +298,7 @@ pub fn get_token_by_id(id: &str) -> Result<Option<UserToken>, String> {
             total_tokens_used: row.get("total_tokens_used")?,
         })
     }).optional().map_err(|e| format!("Failed to query token: {}", e))?;
-    
+
     Ok(token)
 }
 
@@ -289,7 +307,7 @@ pub fn get_token_by_value(token: &str) -> Result<Option<UserToken>, String> {
     let conn = connect_db()?;
     let mut stmt = conn.prepare("SELECT * FROM user_tokens WHERE token = ?1")
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
-    
+
     let token = stmt.query_row(params![token], |row| {
         Ok(UserToken {
             id: row.get("id")?,
@@ -299,6 +317,8 @@ pub fn get_token_by_value(token: &str) -> Result<Option<UserToken>, String> {
             enabled: row.get("enabled")?,
             expires_type: row.get("expires_type")?,
             expires_at: row.get("expires_at")?,
+            duration_seconds: row.get("duration_seconds").unwrap_or(None),
+            activated_at: row.get("activated_at").unwrap_or(None),
             max_ips: row.get("max_ips")?,
             curfew_start: row.get("curfew_start").unwrap_or(None),
             curfew_end: row.get("curfew_end").unwrap_or(None),
@@ -379,22 +399,72 @@ pub fn update_token(
 }
 
 /// 续期令牌
-pub fn renew_token(id: &str, expires_type: &str) -> Result<(), String> {
+/// - 已过期/未激活 → 重置为待激活状态，设置新的 duration_seconds
+/// - 未过期(活跃中) → 在剩余时间基础上增量叠加
+pub fn renew_token(id: &str, expires_type: &str, custom_duration: Option<i64>) -> Result<(), String> {
     let conn = connect_db()?;
     let now = Utc::now().timestamp();
-    
-    let expires_at = match expires_type {
-        "day" => Some(Utc::now().checked_add_signed(chrono::Duration::days(1)).unwrap().timestamp()),
-        "week" => Some(Utc::now().checked_add_signed(chrono::Duration::weeks(1)).unwrap().timestamp()),
-        "month" => Some(Utc::now().checked_add_signed(chrono::Duration::days(30)).unwrap().timestamp()),
-        _ => None, // "never" or other
+
+    let add_duration = match expires_type {
+        "hour" => Some(3600i64),
+        "day" => Some(86400i64),
+        "3day" => Some(86400i64 * 3),
+        "week" => Some(86400i64 * 7),
+        "month" => Some(86400i64 * 30),
+        "custom" => custom_duration,
+        _ => None, // "never"
     };
 
-    conn.execute(
-        "UPDATE user_tokens SET expires_type = ?1, expires_at = ?2, updated_at = ?3, enabled = 1 WHERE id = ?4",
-        params![expires_type, expires_at, now, id],
-    ).map_err(|e| format!("Failed to renew token: {}", e))?;
-    
+    // 查询当前 token 状态
+    let token = get_token_by_id(id)?
+        .ok_or_else(|| "Token not found".to_string())?;
+
+    let is_expired = match token.expires_at {
+        Some(ea) => ea < now,
+        None => false,
+    };
+    let is_pending = token.activated_at.is_none() && token.duration_seconds.is_some();
+
+    if is_expired {
+        // 已过期 → 重置为待激活状态
+        conn.execute(
+            "UPDATE user_tokens SET expires_type = ?1, expires_at = NULL, duration_seconds = ?2, activated_at = NULL, updated_at = ?3, enabled = 1 WHERE id = ?4",
+            params![expires_type, add_duration, now, id],
+        ).map_err(|e| format!("Failed to renew token: {}", e))?;
+    } else if is_pending {
+        // 待激活 → 增量叠加 duration_seconds
+        if let Some(duration) = add_duration {
+            let new_duration = token.duration_seconds.unwrap_or(0) + duration;
+            conn.execute(
+                "UPDATE user_tokens SET duration_seconds = ?1, updated_at = ?2 WHERE id = ?3",
+                params![new_duration, now, id],
+            ).map_err(|e| format!("Failed to renew token: {}", e))?;
+        }
+    } else if let Some(duration) = add_duration {
+        // 活跃中 → 在现有 expires_at 基础上增量叠加
+        if let Some(current_expires) = token.expires_at {
+            let new_expires = current_expires + duration;
+            let new_duration = token.duration_seconds.unwrap_or(0) + duration;
+            conn.execute(
+                "UPDATE user_tokens SET expires_at = ?1, duration_seconds = ?2, updated_at = ?3 WHERE id = ?4",
+                params![new_expires, new_duration, now, id],
+            ).map_err(|e| format!("Failed to renew token: {}", e))?;
+        } else {
+            // 永不过期的 token，设置新的有效期（从现在开始）
+            let new_expires = now + duration;
+            conn.execute(
+                "UPDATE user_tokens SET expires_type = ?1, expires_at = ?2, duration_seconds = ?3, activated_at = ?4, updated_at = ?4 WHERE id = ?5",
+                params![expires_type, new_expires, duration, now, id],
+            ).map_err(|e| format!("Failed to renew token: {}", e))?;
+        }
+    } else {
+        // "never" → 清除过期限制
+        conn.execute(
+            "UPDATE user_tokens SET expires_type = 'never', expires_at = NULL, duration_seconds = NULL, updated_at = ?1, enabled = 1 WHERE id = ?2",
+            params![now, id],
+        ).map_err(|e| format!("Failed to renew token: {}", e))?;
+    }
+
     Ok(())
 }
 
@@ -498,14 +568,31 @@ pub fn record_token_usage_and_ip(
     Ok(())
 }
 
-/// 检查 Token 是否有效 (包含过期时间检查和 IP 限制检查)
+/// 检查 Token 是否有效 (包含启用检查、激活机制、过期时间检查和 IP 限制检查)
+/// 首次请求时自动激活 Token 并开始计时
 /// 返回: (是否有效, 拒绝原因)
 pub fn validate_token(token_str: &str, ip: &str) -> Result<(bool, Option<String>), String> {
     let token_opt = get_token_by_value(token_str)?;
 
     if let Some(token) = token_opt {
-        // 1. 检查过期时间
-        if let Some(expires_at) = token.expires_at {
+        // 0. 检查是否启用
+        if !token.enabled {
+            return Ok((false, Some("Your token has been disabled. Please contact the administrator.".to_string())));
+        }
+
+        // 1. 首次请求激活机制
+        if token.activated_at.is_none() && token.duration_seconds.is_some() {
+            let duration = token.duration_seconds.unwrap();
+            let now = Utc::now().timestamp();
+            let expires_at = now + duration;
+            let conn = connect_db()?;
+            conn.execute(
+                "UPDATE user_tokens SET activated_at = ?1, expires_at = ?2, updated_at = ?1 WHERE id = ?3",
+                params![now, expires_at, token.id],
+            ).map_err(|e| format!("Failed to activate token: {}", e))?;
+            // 激活成功，继续后续检查（此时刚激活，肯定未过期）
+        } else if let Some(expires_at) = token.expires_at {
+            // 2. 已激活的 Token 检查过期时间
             if expires_at < Utc::now().timestamp() {
                 return Ok((false, Some("Your token has expired. Please contact the administrator to renew it.".to_string())));
             }

@@ -9,7 +9,7 @@ pub struct CreateTokenRequest {
     pub max_ips: i32,
     pub curfew_start: Option<String>,
     pub curfew_end: Option<String>,
-    pub custom_expires_at: Option<i64>,  // 自定义过期时间戳 (秒)
+    pub duration_seconds: Option<i64>,  // 有效期时长(秒)，custom 模式下使用
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,7 +40,7 @@ pub async fn create_user_token(request: CreateTokenRequest) -> Result<UserToken,
         request.max_ips,
         request.curfew_start,
         request.curfew_end,
-        request.custom_expires_at,
+        request.duration_seconds,
     )
 }
 
@@ -66,8 +66,8 @@ pub async fn delete_user_token(id: String) -> Result<(), String> {
 
 /// 续期令牌
 #[tauri::command]
-pub async fn renew_user_token(id: String, expires_type: String) -> Result<(), String> {
-    user_token_db::renew_token(&id, &expires_type)
+pub async fn renew_user_token(id: String, expires_type: String, custom_duration: Option<i64>) -> Result<(), String> {
+    user_token_db::renew_token(&id, &expires_type, custom_duration)
 }
 
 /// 获取令牌 IP 绑定
