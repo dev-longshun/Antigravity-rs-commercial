@@ -488,7 +488,7 @@ export default function ApiProxy() {
 
     // Zeabur: 复制 API 配置
     const handleZeaburCopyConfig = async () => {
-        const config = `Base URL: ${zeaburInstanceUrl}/v1\nAPI Key: ${zeaburApiKey}`;
+        const config = `Base URL: ${zeaburInstanceUrl}\nAPI Key: ${zeaburApiKey}`;
         const success = await copyToClipboard(config);
         if (success) {
             setCopied('zeabur-config');

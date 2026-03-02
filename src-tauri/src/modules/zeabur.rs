@@ -185,9 +185,10 @@ impl ZeaburManager {
                     remote.accounts_count
                 );
 
+                drop(s); // 释放写锁，避免死锁
+
                 // 启动自动同步（如果配置开启）
                 if config.auto_sync {
-                    drop(s); // 释放锁
                     self.start_auto_sync().await;
                 }
 

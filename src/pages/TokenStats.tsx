@@ -85,6 +85,15 @@ const TokenStats: React.FC = () => {
     const [summary, setSummary] = useState<TokenStatsSummary | null>(null);
     const [loading, setLoading] = useState(true);
 
+    const withTimeout = <T,>(promise: Promise<T>, ms = 10000): Promise<T> => {
+        return Promise.race([
+            promise,
+            new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Request timeout')), ms)
+            )
+        ]);
+    };
+
     const fetchData = async () => {
         setLoading(true);
         try {
@@ -96,21 +105,27 @@ const TokenStats: React.FC = () => {
             switch (timeRange) {
                 case 'hourly':
                     hours = 24;
-                    data = await invoke<TokenStatsAggregated[]>('get_token_stats_hourly', { hours: 24 });
-                    modelTrend = await invoke<ModelTrendPoint[]>('get_token_stats_model_trend_hourly', { hours: 24 });
-                    accountTrend = await invoke<AccountTrendPoint[]>('get_token_stats_account_trend_hourly', { hours: 24 });
+                    [data, modelTrend, accountTrend] = await Promise.all([
+                        withTimeout(invoke<TokenStatsAggregated[]>('get_token_stats_hourly', { hours: 24 })),
+                        withTimeout(invoke<ModelTrendPoint[]>('get_token_stats_model_trend_hourly', { hours: 24 })),
+                        withTimeout(invoke<AccountTrendPoint[]>('get_token_stats_account_trend_hourly', { hours: 24 }))
+                    ]);
                     break;
                 case 'daily':
                     hours = 168;
-                    data = await invoke<TokenStatsAggregated[]>('get_token_stats_daily', { days: 7 });
-                    modelTrend = await invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 7 });
-                    accountTrend = await invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 7 });
+                    [data, modelTrend, accountTrend] = await Promise.all([
+                        withTimeout(invoke<TokenStatsAggregated[]>('get_token_stats_daily', { days: 7 })),
+                        withTimeout(invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 7 })),
+                        withTimeout(invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 7 }))
+                    ]);
                     break;
                 case 'weekly':
                     hours = 720;
-                    data = await invoke<TokenStatsAggregated[]>('get_token_stats_weekly', { weeks: 4 });
-                    modelTrend = await invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 30 });
-                    accountTrend = await invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 30 });
+                    [data, modelTrend, accountTrend] = await Promise.all([
+                        withTimeout(invoke<TokenStatsAggregated[]>('get_token_stats_weekly', { weeks: 4 })),
+                        withTimeout(invoke<ModelTrendPoint[]>('get_token_stats_model_trend_daily', { days: 30 })),
+                        withTimeout(invoke<AccountTrendPoint[]>('get_token_stats_account_trend_daily', { days: 30 }))
+                    ]);
                     break;
             }
 
@@ -150,9 +165,9 @@ const TokenStats: React.FC = () => {
             setAccountTrendData(transformedAccountTrend);
 
             const [accounts, models_stats, summaryData] = await Promise.all([
-                invoke<AccountTokenStats[]>('get_token_stats_by_account', { hours }),
-                invoke<ModelTokenStats[]>('get_token_stats_by_model', { hours }),
-                invoke<TokenStatsSummary>('get_token_stats_summary', { hours })
+                withTimeout(invoke<AccountTokenStats[]>('get_token_stats_by_account', { hours })),
+                withTimeout(invoke<ModelTokenStats[]>('get_token_stats_by_model', { hours })),
+                withTimeout(invoke<TokenStatsSummary>('get_token_stats_summary', { hours }))
             ]);
 
             setAccountData(accounts);

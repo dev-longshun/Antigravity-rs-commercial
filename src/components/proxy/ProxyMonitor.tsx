@@ -176,20 +176,24 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         return Array.from(emailSet).sort();
     }, [logs, accounts]);
 
+    const loadingRef = useRef(false);
+
+    const withTimeout = <T,>(promise: Promise<T>, ms = 10000): Promise<T> => {
+        return Promise.race([
+            promise,
+            new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Request timeout')), ms)
+            )
+        ]);
+    };
+
     const loadData = async (page = 1, searchFilter = filter, accountEmailFilter = accountFilter) => {
-        if (loading) return;
+        if (loadingRef.current) return;
+        loadingRef.current = true;
         setLoading(true);
 
         try {
-            // Add timeout control (10 seconds)
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Request timeout')), 10000)
-            );
-
-            const config = await Promise.race([
-                invoke<AppConfig>('load_config'),
-                timeoutPromise
-            ]) as AppConfig;
+            const config = await withTimeout(invoke<AppConfig>('load_config'));
 
             if (config && config.proxy) {
                 setIsLoggingEnabled(config.proxy.enable_logging);
@@ -203,26 +207,20 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 : baseFilter;
 
             // Get count with filter
-            const count = await Promise.race([
-                invoke<number>('get_proxy_logs_count_filtered', {
-                    filter: actualFilter,
-                    errorsOnly: errorsOnly
-                }),
-                timeoutPromise
-            ]) as number;
+            const count = await withTimeout(invoke<number>('get_proxy_logs_count_filtered', {
+                filter: actualFilter,
+                errorsOnly: errorsOnly
+            }));
             setTotalCount(count);
 
             // Use filtered paginated query
             const offset = (page - 1) * pageSize;
-            const history = await Promise.race([
-                invoke<ProxyRequestLog[]>('get_proxy_logs_filtered', {
-                    filter: actualFilter,
-                    errorsOnly: errorsOnly,
-                    limit: pageSize,
-                    offset: offset
-                }),
-                timeoutPromise
-            ]) as ProxyRequestLog[];
+            const history = await withTimeout(invoke<ProxyRequestLog[]>('get_proxy_logs_filtered', {
+                filter: actualFilter,
+                errorsOnly: errorsOnly,
+                limit: pageSize,
+                offset: offset
+            }));
 
             if (Array.isArray(history)) {
                 setLogs(history);
@@ -230,19 +228,16 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                 pendingLogsRef.current = [];
             }
 
-            const currentStats = await Promise.race([
-                invoke<ProxyStats>('get_proxy_stats'),
-                timeoutPromise
-            ]) as ProxyStats;
+            const currentStats = await withTimeout(invoke<ProxyStats>('get_proxy_stats'));
 
             if (currentStats) setStats(currentStats);
         } catch (e: any) {
             console.error("Failed to load proxy data", e);
             if (e.message === 'Request timeout') {
-                // Show timeout error to user
                 console.error('Loading monitor data timeout, please try again later');
             }
         } finally {
+            loadingRef.current = false;
             setLoading(false);
         }
     };
