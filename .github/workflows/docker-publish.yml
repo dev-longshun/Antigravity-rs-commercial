@@ -61,6 +61,8 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           build-args: USE_MIRROR=false
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
 
   docker-build-arm64:
     runs-on: ubuntu-24.04-arm
@@ -116,6 +118,8 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           build-args: USE_MIRROR=false
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
 
   docker-manifest:
     needs: [docker-build-amd64, docker-build-arm64]
